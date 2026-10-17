@@ -196,8 +196,9 @@ export default {
 				});
 				return Response.json({ ok: true, webhook_registered: result });
 			} catch (error) {
-				console.error('Failed to register Telegram webhook:', error);
-				return new Response('Could not register the Telegram webhook.', { status: 502 });
+				const message = error instanceof Error ? error.message : String(error);
+				console.error(`Failed to register Telegram webhook: ${message}`);
+				return new Response(`Could not register the Telegram webhook: ${message}`, { status: 502 });
 			}
 		}
 
