@@ -9,7 +9,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Install dependencies
-        run: pip install requests
+        run: pip install requests google-api-python-client google-auth google-auth-httplib2
       - name: Run FPL update
         run: python fpl_update.py
         env:
@@ -18,3 +18,6 @@ jobs:
           TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
           FPL_LEAGUE_ID_2: ${{ secrets.FPL_LEAGUE_ID_2 }}
           TG_CHAT_ID_2: ${{ secrets.TG_CHAT_ID_2 }}
+          GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
+          FPL_LEAGUE_SHEET_ID: ${{ secrets.FPL_LEAGUE_SHEET_ID }}
+          FPL_LEAGUE_SHEET_ID_2: ${{ secrets.FPL_LEAGUE_SHEET_ID_2 }}
