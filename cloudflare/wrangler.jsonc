@@ -2,7 +2,7 @@
   "$schema": "node_modules/wrangler/config-schema.json",
   "name": "fpl-score-bot",
   "main": "src/index.js",
-  "compatibility_date": "2026-10-18",
+  "compatibility_date": "2026-10-17",
   "observability": {
     "enabled": true
   }
