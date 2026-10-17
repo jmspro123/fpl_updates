@@ -1,0 +1,16 @@
+name: fpl-update
+on:
+  schedule:
+    - cron: "0 8 * * 2"   # Tuesdays 8:00 UTC (4pm SGT)
+  workflow_dispatch:
+jobs:
+  send:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: pip install requests
+      - run: python fpl_update.py
+        env:
+          FPL_LEAGUE_ID: ${{ secrets.FPL_LEAGUE_ID }}
+          TG_TOKEN: ${{ secrets.TG_TOKEN }}
+          TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
