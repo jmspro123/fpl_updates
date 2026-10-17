@@ -44,8 +44,8 @@ top_two = quarter_rows[:2]
 bottom_two = quarter_rows[-2:]
 lines.extend([
     "",
-    "🍗 Wingstop treated: " + ", ".join(row[0] for row in top_two),
-    "🍗 Wingstop pay (up to $15 each): " + ", ".join(row[0] for row in bottom_two),
+    "🍗 Gets free Wingstop: " + ", ".join(row[0] for row in top_two),
+    "🍗 Pays for Wingstop (up to $15 each): " + ", ".join(row[0] for row in bottom_two),
     "",
     f"🏆 Overall leader: {season_rows[0][0]} ({season_rows[0][3]} pts) — jersey winner; "
     "the rest split the cost evenly.",
