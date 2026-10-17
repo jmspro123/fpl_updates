@@ -16,20 +16,40 @@ for m in members:
     data.append((m["player_name"], hist))
 
 gw = max(e["event"] for e in data[0][1])
-start = (gw - 1) // 4 * 4 + 1  # block start: GW1, 5, 9...
+quarters = [(1, 9), (10, 18), (19, 27), (28, 38)]
+quarter_number, (start, end) = next(
+    (number, bounds)
+    for number, bounds in enumerate(quarters, start=1)
+    if bounds[0] <= gw <= bounds[1]
+)
 net = lambda e: e["points"] - e["event_transfers_cost"]
 
 rows = []
 for name, hist in data:
-    block = sum(net(e) for e in hist if start <= e["event"] <= gw)
+    quarter_points = sum(net(e) for e in hist if start <= e["event"] <= gw)
+    season_points = sum(net(e) for e in hist if e["event"] <= gw)
     this_gw = sum(net(e) for e in hist if e["event"] == gw)
-    rows.append((name, this_gw, block))
-rows.sort(key=lambda r: r[2], reverse=True)
+    rows.append((name, this_gw, quarter_points, season_points))
+quarter_rows = sorted(rows, key=lambda row: row[2], reverse=True)
+season_rows = sorted(rows, key=lambda row: row[3], reverse=True)
 
-lines = [f"⚽ FPL update: GW{gw}", f"Block: GW{start}–{start+3}", ""]
-medals = ["🥇", "🥈", "🥉", "4️⃣"]
-for i, (n, g, b) in enumerate(rows):
-    lines.append(f"{medals[i]} {n}: {b} pts (GW: {g})")
+lines = [
+    f"⚽ FPL update: GW{gw}",
+    f"Quarter {quarter_number} standings (GW{start}–{end}; through GW{gw}):",
+]
+for i, (name, this_gw, quarter_points, _) in enumerate(quarter_rows, start=1):
+    lines.append(f"{i}. {name}: {quarter_points} pts (GW: {this_gw})")
+
+top_two = quarter_rows[:2]
+bottom_two = quarter_rows[-2:]
+lines.extend([
+    "",
+    "🍗 Wingstop treated: " + ", ".join(row[0] for row in top_two),
+    "🍗 Wingstop pay (up to $15 each): " + ", ".join(row[0] for row in bottom_two),
+    "",
+    f"🏆 Overall leader: {season_rows[0][0]} ({season_rows[0][3]} pts) — jersey winner; "
+    "the rest split the cost evenly.",
+])
 
 requests.post(
     f"https://api.telegram.org/bot{TOKEN}/sendMessage",
