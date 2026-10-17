@@ -1,0 +1,16 @@
+[Unit]
+Description=FPL Telegram score bot
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+User=ubuntu
+WorkingDirectory=/home/ubuntu/fpl_updates
+EnvironmentFile=/etc/fpl-bot.env
+ExecStart=/home/ubuntu/fpl_updates/.venv/bin/python /home/ubuntu/fpl_updates/fpl_bot.py
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
