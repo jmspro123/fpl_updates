@@ -366,16 +366,46 @@ async function movesText(leagueId) {
 	const members = standings?.standings?.results || [];
 	if (members.length === 0) return 'No managers were found in this league.';
 	const playerNames = new Map((bootstrap.elements || []).map((player) => [player.id, player.web_name]));
-	const transfers = (await Promise.all(members.map(async (member) => {
-		const history = await fplGet(`entry/${member.entry}/transfers/`);
-		return (history || []).map((transfer) => ({ ...transfer, manager: member.player_name }));
-	}))).flat().sort((a, b) => new Date(b.time).getTime() - new Date(a.time).getTime()).slice(0, 15);
-	if (transfers.length === 0) return 'No transfers have been recorded in this league yet.';
-	const lines = [`🔄 Latest league transfers (${transfers.length} shown):`];
+	const managerActivity = await Promise.all(members.map(async (member) => {
+		const [transfers, history] = await Promise.all([
+			fplGet(`entry/${member.entry}/transfers/`),
+			fplGet(`entry/${member.entry}/history/`),
+		]);
+		return { manager: member.player_name, transfers: transfers || [], history };
+	}));
+	const transfers = managerActivity.flatMap(({ manager, transfers: rows }) =>
+		rows.map((transfer) => ({ ...transfer, manager })))
+		.sort((a, b) => new Date(b.time).getTime() - new Date(a.time).getTime()).slice(0, 15);
+	const specialMoves = managerActivity.flatMap(({ manager, history }) => [
+		...(history.chips || []).map((chip) => ({ type: 'chip', manager, event: chip.event, name: chip.name })),
+		...(history.current || []).filter((event) => event.event_transfers_cost > 0)
+			.map((event) => ({ type: 'hit', manager, event: event.event, cost: event.event_transfers_cost })),
+	]).sort((a, b) => b.event - a.event).slice(0, 10);
+	if (transfers.length === 0 && specialMoves.length === 0) return 'No transfers, chips, or point hits have been recorded in this league yet.';
+	const lines = [];
+	if (transfers.length) lines.push(`🔄 Latest league transfers (${transfers.length} shown):`);
 	for (const transfer of transfers) {
 		const playerIn = playerNames.get(transfer.element_in) || `Player ${transfer.element_in}`;
 		const playerOut = playerNames.get(transfer.element_out) || `Player ${transfer.element_out}`;
 		lines.push(`GW${transfer.event} · ${transfer.manager}: ${playerOut} → ${playerIn} · ${formatTransferTime(transfer.time)}`);
+	}
+	if (specialMoves.length) {
+		lines.push('', '⚡ Chips & hits (latest 10):');
+		for (const move of specialMoves) {
+			if (move.type === 'hit') {
+				lines.push(`GW${move.event} · ${move.manager}: took a -${move.cost} point hit`);
+			} else {
+				const chipNames = {
+					wildcard: 'Wildcard',
+					freehit: 'Free Hit',
+					bboost: 'Bench Boost',
+					'3xc': 'Triple Captain',
+					assistant_manager: 'Assistant Manager',
+				};
+				const chipName = chipNames[move.name] || move.name.replaceAll('_', ' ');
+				lines.push(`GW${move.event} · ${move.manager}: used ${chipName}`);
+			}
+		}
 	}
 	return lines.join('\n');
 }
@@ -532,7 +562,7 @@ async function handleTelegramUpdate(update, env) {
 	if (command === '/start' || command === '/help') {
 		await telegramCall(env, 'sendMessage', {
 			chat_id: chatId,
-			text: 'FPL commands:\n/score - league score and prizes\n/table - overall standings\n/form - points over the last 5 gameweeks\n/gw - latest gameweek standings\n/rival - tap two managers to compare (or type names)\n/moves - latest league transfers\n/banter - weekly bragging rights\n/fixtures - next fixtures and toughest runs\n/recommend - stats-based picks by position\n/captain - captain shortlist\n/team - tap a manager to view their picks (or type a name)',
+			text: 'FPL commands:\n/score - league score and prizes\n/table - overall standings\n/form - points over the last 5 gameweeks\n/gw - latest gameweek standings\n/rival - tap two managers to compare (or type names)\n/moves - latest transfers, chips and hits\n/banter - weekly bragging rights\n/fixtures - next fixtures and toughest runs\n/recommend - stats-based picks by position\n/captain - captain shortlist\n/team - tap a manager to view their picks (or type a name)',
 		});
 		return;
 	}

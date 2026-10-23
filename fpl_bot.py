@@ -329,14 +329,34 @@ def build_moves_text(league_id):
     bootstrap = get('bootstrap-static/')
     player_names = {player['id']: player['web_name'] for player in bootstrap.get('elements', [])}
     transfers = []
+    special_moves = []
     for member in members:
-        history = get(f"entry/{member['entry']}/transfers/")
-        transfers.extend({**transfer, 'manager': member['player_name']} for transfer in history)
+        entry_id = member['entry']
+        manager = member['player_name']
+        history = get(f'entry/{entry_id}/history/')
+        transfer_history = get(f'entry/{entry_id}/transfers/')
+        transfers.extend({**transfer, 'manager': manager} for transfer in transfer_history)
+        special_moves.extend({
+            'type': 'chip',
+            'manager': manager,
+            'event': chip['event'],
+            'name': chip['name'],
+        } for chip in history.get('chips', []))
+        special_moves.extend({
+            'type': 'hit',
+            'manager': manager,
+            'event': event['event'],
+            'cost': event['event_transfers_cost'],
+        } for event in history.get('current', []) if event.get('event_transfers_cost', 0) > 0)
     transfers.sort(key=lambda transfer: transfer.get('time', ''), reverse=True)
     transfers = transfers[:15]
-    if not transfers:
-        return 'No transfers have been recorded in this league yet.'
-    lines = [f'🔄 Latest league transfers ({len(transfers)} shown):']
+    special_moves.sort(key=lambda move: move['event'], reverse=True)
+    special_moves = special_moves[:10]
+    if not transfers and not special_moves:
+        return 'No transfers, chips, or point hits have been recorded in this league yet.'
+    lines = []
+    if transfers:
+        lines.append(f'🔄 Latest league transfers ({len(transfers)} shown):')
     for transfer in transfers:
         player_in = player_names.get(transfer['element_in'], f"Player {transfer['element_in']}")
         player_out = player_names.get(transfer['element_out'], f"Player {transfer['element_out']}")
@@ -344,6 +364,21 @@ def build_moves_text(league_id):
         lines.append(
             f"GW{transfer['event']} · {transfer['manager']}: {player_out} → {player_in} · {timestamp}"
         )
+    if special_moves:
+        lines.extend(['', '⚡ Chips & hits (latest 10):'])
+        chip_names = {
+            'wildcard': 'Wildcard',
+            'freehit': 'Free Hit',
+            'bboost': 'Bench Boost',
+            '3xc': 'Triple Captain',
+            'assistant_manager': 'Assistant Manager',
+        }
+        for move in special_moves:
+            if move['type'] == 'hit':
+                lines.append(f"GW{move['event']} · {move['manager']}: took a -{move['cost']} point hit")
+            else:
+                chip = chip_names.get(move['name'], move['name'].replace('_', ' ').title())
+                lines.append(f"GW{move['event']} · {move['manager']}: used {chip}")
     return '\n'.join(lines)
 
 
@@ -513,7 +548,7 @@ def handle_command(text, chat_id):
             'FPL commands:\n/score - league score and prizes\n/table - overall standings\n'
             '/form - points over the last 5 gameweeks\n/gw - latest gameweek standings\n'
             '/rival - tap two managers to compare (or type names)\n/banter - weekly bragging rights\n'
-            '/moves - latest league transfers\n'
+            '/moves - latest transfers, chips and hits\n'
             '/fixtures - next fixtures and toughest runs\n/recommend - stats-based picks by position\n'
             '/captain - captain shortlist\n/team - tap a manager to view picks (or type a name)'
         )

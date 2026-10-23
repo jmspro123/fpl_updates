@@ -66,6 +66,23 @@ beforeEach(() => {
 				? [{ event: 5, element_in: 103, element_out: 102, time: '2026-10-24T10:00:00Z' }]
 				: [{ event: 5, element_in: 104, element_out: 101, time: '2026-10-24T11:00:00Z' }]);
 		}
+		if (url.includes('/history/')) {
+			fplCalls.push(url);
+			const entry = Number(url.match(/entry\/(\d+)/)[1]);
+			return Response.json({
+				current: [1, 2, 3, 4].map((event) => {
+					const cost = event === 4 && entry === 11 ? 4 : event === 3 && entry === 22 ? 8 : 0;
+					return {
+						event,
+						points: (entry === 11 ? 10 + event : 20 + event) + cost,
+						event_transfers_cost: cost,
+					};
+				}),
+				chips: entry === 11
+					? [{ name: 'freehit', event: 3 }]
+					: [{ name: 'wildcard', event: 2 }],
+			});
+		}
 		if (url.includes('/leagues-classic/')) {
 			fplCalls.push(url);
 			return Response.json({ standings: { results: [
@@ -199,6 +216,10 @@ test('/moves shows the latest league transfers first with player names', async (
 	assert.match(text, /Latest league transfers \(2 shown\)/);
 	assert.ok(text.indexOf('Beta: Keeper → Forward') < text.indexOf('Alpha: Captain → Midfielder'));
 	assert.match(text, /GW5 · Beta: Keeper → Forward · 24 Oct 11:00 UTC/);
+	assert.match(text, /GW3 · Alpha: used Free Hit/);
+	assert.match(text, /GW2 · Beta: used Wildcard/);
+	assert.match(text, /GW4 · Alpha: took a -4 point hit/);
+	assert.match(text, /GW3 · Beta: took a -8 point hit/);
 });
 
 test('team command displays a manager’s starting picks, captain, and bench', async () => {
