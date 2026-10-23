@@ -8,10 +8,12 @@ Available Telegram commands:
 - `/table` — overall standings and points behind the leader.
 - `/form` — standings over the last five available gameweeks.
 - `/gw` — latest gameweek standings.
-- `/rival <name>` — show a manager’s season and recent form ranks; `/rival <name 1> vs <name 2>` compares two managers directly.
+- `/rival` — select two managers from Telegram buttons to compare them; typed names still work as well.
 - `/banter` — friendly weekly bragging-rights recap.
 - `/fixtures` — next gameweek’s fixtures and the toughest upcoming fixture runs.
-- `/team <manager name>` — show a league manager’s picks, captain, vice-captain, and bench when FPL makes the picks available.
+- `/team` — select a manager from Telegram buttons to view their picks, captain, vice-captain, and bench when FPL makes the picks available. A typed manager name still works too.
+
+After deploying a version that adds callback buttons, call the protected `/setup` endpoint once again so Telegram registers callback-query updates with the webhook. No new secret or Cloudflare variable is needed.
 
 ## Deploy from GitHub
 

@@ -101,6 +101,21 @@ async function postUpdate(chatId, text, secret = env.TELEGRAM_WEBHOOK_SECRET) {
 	}), env);
 }
 
+async function postCallback(chatId, data, secret = env.TELEGRAM_WEBHOOK_SECRET) {
+	return worker.fetch(new Request('https://test.workers.dev/telegram-webhook', {
+		method: 'POST',
+		headers: {
+			'Content-Type': 'application/json',
+			'X-Telegram-Bot-Api-Secret-Token': secret,
+		},
+		body: JSON.stringify({ callback_query: {
+			id: `callback-${data}`,
+			data,
+			message: { chat: { id: chatId } },
+		} }),
+	}), env);
+}
+
 test('main group gets quarter standings, including a bot command suffix', async () => {
 	const response = await postUpdate(-1001, '/score@fpl_update_bot');
 	assert.equal(response.status, 200);
@@ -158,10 +173,37 @@ test('team command displays a manager’s starting picks, captain, and bench', a
 	assert.match(telegramReplies.at(-1).text, /Bench: Player8/);
 });
 
+test('/team without a name offers tappable manager choices', async () => {
+	await postUpdate(-1001, '/team');
+	const menu = telegramReplies.at(-1);
+	assert.match(menu.text, /Choose a manager/);
+	assert.deepEqual(menu.reply_markup.inline_keyboard[0].map((button) => button.text), ['Alpha', 'Beta']);
+	assert.equal(menu.reply_markup.inline_keyboard[0][0].callback_data, 'team:11');
+
+	await postCallback(-1001, 'team:11');
+	assert.match(telegramReplies.at(-1).text, /Alpha’s GW4 team/);
+	assert.equal(telegramCalls.some((call) => call.url.endsWith('/answerCallbackQuery')), true);
+});
+
+test('/rival without names lets the user select both managers', async () => {
+	await postUpdate(-1001, '/rival');
+	assert.match(telegramReplies.at(-1).text, /Choose the first manager/);
+
+	await postCallback(-1001, 'rival:11');
+	const secondMenu = telegramReplies.at(-1);
+	assert.match(secondMenu.text, /Choose the second manager/);
+	assert.deepEqual(secondMenu.reply_markup.inline_keyboard.flat().map((button) => button.callback_data), ['rival2:11:22']);
+
+	await postCallback(-1001, 'rival2:11:22');
+	assert.match(telegramReplies.at(-1).text, /Alpha vs Beta — GW4/);
+	assert.match(telegramReplies.at(-1).text, /Beta \+40/);
+});
+
 test('/help lists the expanded command set', async () => {
 	await postUpdate(-1001, '/help');
 	assert.match(telegramReplies.at(-1).text, /\/fixtures/);
-	assert.match(telegramReplies.at(-1).text, /\/team <name>/);
+	assert.match(telegramReplies.at(-1).text, /\/team - tap a manager/);
+	assert.match(telegramReplies.at(-1).text, /\/rival - tap two managers/);
 });
 
 test('unconfigured group cannot receive either league score', async () => {
@@ -188,4 +230,5 @@ test('protected setup registers the HTTPS webhook with Telegram', async () => {
 	assert.equal(telegramCalls[0].url.endsWith('/setWebhook'), true);
 	assert.equal(telegramCalls[0].body.url, 'https://test.workers.dev/telegram-webhook');
 	assert.equal(telegramCalls[0].body.secret_token, env.TELEGRAM_WEBHOOK_SECRET);
+	assert.deepEqual(telegramCalls[0].body.allowed_updates, ['message', 'callback_query']);
 });

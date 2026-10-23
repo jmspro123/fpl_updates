@@ -35,7 +35,7 @@ async function getHistoryRows(leagueId) {
 	}
 	return Promise.all(members.map(async (member) => {
 		const history = await fplGet(`entry/${member.entry}/history/`);
-		return [member.player_name, history.current || []];
+		return [member.player_name, history.current || [], member.entry];
 	}));
 }
 
@@ -127,8 +127,9 @@ async function scoreText(leagueId, mode) {
 }
 
 function seasonRows(data, gw) {
-	return data.map(([name, history]) => ({
+	return data.map(([name, history, entryId]) => ({
 		name,
+		entryId,
 		seasonPoints: history.filter((event) => event.event <= gw).reduce((total, event) => total + net(event), 0),
 		thisGw: history.filter((event) => event.event === gw).reduce((total, event) => total + net(event), 0),
 	})).sort((a, b) => b.seasonPoints - a.seasonPoints);
@@ -186,20 +187,43 @@ function buildRivalMessage(data, gw, query) {
 		};
 	});
 	if (metrics.length === 2) {
-		const [first, second] = metrics;
-		return [`🆚 ${first.name} vs ${second.name} — GW${gw}`,
-			`Season: ${first.name} ${first.season} pts, ${second.name} ${second.season} pts (${first.season - second.season >= 0 ? `${first.name} +${first.season - second.season}` : `${second.name} +${second.season - first.season}`})`,
-			`Last ${weeks.length} GWs: ${first.name} ${first.recent} pts, ${second.name} ${second.recent} pts (${first.recent - second.recent >= 0 ? `${first.name} +${first.recent - second.recent}` : `${second.name} +${second.recent - first.recent}`})`].join('\n');
+		return buildRivalComparison(metrics[0], metrics[1], gw, weeks.length);
 	}
 	const [{ name, recent, season }] = metrics;
 	const rankedSeason = seasonRows(data, gw);
-	const rank = rankedSeason.findIndex((row) => row.name === name) + 1;
-	const recentRows = data.map(([manager, rows]) => ({
+	const target = results[0].manager;
+	const entryId = target[2];
+	const rank = rankedSeason.findIndex((row) => entryId !== undefined ? row.entryId === entryId : row.name === name) + 1;
+	const recentRows = data.map(([manager, rows, managerEntryId]) => ({
 		name: manager,
+		entryId: managerEntryId,
 		points: rows.filter((event) => weeks.includes(event.event)).reduce((total, event) => total + net(event), 0),
 	})).sort((a, b) => b.points - a.points);
-	const recentRank = recentRows.findIndex((row) => row.name === name) + 1;
+	const recentRank = recentRows.findIndex((row) => entryId !== undefined ? row.entryId === entryId : row.name === name) + 1;
 	return [`🆚 ${name} — GW${gw}`, `Season: ${season} pts (rank ${rank}/${data.length})`, `Last ${weeks.length} GWs: ${recent} pts (rank ${recentRank}/${data.length})`].join('\n');
+}
+
+function buildRivalComparison(first, second, gw, weekCount) {
+	const seasonLead = first.season - second.season;
+	const recentLead = first.recent - second.recent;
+	const seasonWinner = seasonLead >= 0 ? first.name : second.name;
+	const recentWinner = recentLead >= 0 ? first.name : second.name;
+	return [`🆚 ${first.name} vs ${second.name} — GW${gw}`,
+		`Season: ${first.name} ${first.season} pts, ${second.name} ${second.season} pts (${seasonWinner} +${Math.abs(seasonLead)})`,
+		`Last ${weekCount} GWs: ${first.name} ${first.recent} pts, ${second.name} ${second.recent} pts (${recentWinner} +${Math.abs(recentLead)})`].join('\n');
+}
+
+function buildRivalEntryComparison(data, gw, firstEntryId, secondEntryId) {
+	const weeks = [...new Set(data.flatMap(([, history]) => history.map((event) => event.event)))]
+		.sort((a, b) => b - a).slice(0, 5);
+	const selected = [firstEntryId, secondEntryId].map((entryId) => data.find(([, , id]) => String(id) === String(entryId)));
+	if (selected.some((row) => !row)) return 'A manager in that selection is no longer in this league. Please try /rival again.';
+	const metrics = selected.map(([name, history]) => ({
+		name,
+		season: history.filter((event) => event.event <= gw).reduce((total, event) => total + net(event), 0),
+		recent: history.filter((event) => weeks.includes(event.event)).reduce((total, event) => total + net(event), 0),
+	}));
+	return buildRivalComparison(metrics[0], metrics[1], gw, weeks.length);
 }
 
 function buildBanterMessage(data, gw) {
@@ -248,12 +272,20 @@ async function fixturesText() {
 	return lines.join('\n');
 }
 
-async function teamText(leagueId, query) {
+async function teamText(leagueId, query, selectedEntryId) {
 	const standings = await fplGet(`leagues-classic/${leagueId}/standings/`);
 	const members = standings?.standings?.results || [];
-	const result = findManager(members.map((member) => [member.player_name, member.entry]), query);
-	if (result.error) return result.error;
-	const [name, entryId] = result.manager;
+	let member;
+	if (selectedEntryId !== undefined) {
+		member = members.find((item) => String(item.entry) === String(selectedEntryId));
+		if (!member) return 'That manager is no longer in this league. Please run /team again.';
+	} else {
+		const result = findManager(members.map((item) => [item.player_name, item.entry]), query);
+		if (result.error) return result.error;
+		const [, entryId] = result.manager;
+		member = members.find((item) => String(item.entry) === String(entryId));
+	}
+	const { player_name: name, entry: entryId } = member;
 	const [bootstrap, history] = await Promise.all([
 		fplGet('bootstrap-static/'),
 		fplGet(`entry/${entryId}/history/`),
@@ -279,6 +311,84 @@ async function teamText(leagueId, query) {
 	return lines.join('\n');
 }
 
+function managerKeyboard(members, action, firstEntryId) {
+	const candidates = firstEntryId === undefined
+		? members
+		: members.filter((member) => String(member.entry) !== String(firstEntryId));
+	const prefix = firstEntryId === undefined ? action : `${action}2:${firstEntryId}`;
+	const buttons = candidates.map((member) => {
+		const teamName = member.entry_name && member.entry_name !== member.player_name ? ` · ${member.entry_name}` : '';
+		const text = `${member.player_name}${teamName}`;
+		return {
+			text: Array.from(text).slice(0, 64).join(''),
+			callback_data: `${prefix}:${member.entry}`,
+		};
+	});
+	const keyboard = [];
+	for (let index = 0; index < buttons.length; index += 2) keyboard.push(buttons.slice(index, index + 2));
+	return { inline_keyboard: keyboard };
+}
+
+async function sendManagerChoices(env, chatId, leagueId, action, firstEntryId) {
+	const standings = await fplGet(`leagues-classic/${leagueId}/standings/`);
+	const members = standings?.standings?.results || [];
+	const candidates = firstEntryId === undefined
+		? members
+		: members.filter((member) => String(member.entry) !== String(firstEntryId));
+	if (candidates.length === 0) {
+		await telegramCall(env, 'sendMessage', { chat_id: chatId, text: 'No other managers are available to compare.' });
+		return;
+	}
+	await telegramCall(env, 'sendMessage', {
+		chat_id: chatId,
+		text: firstEntryId === undefined
+			? action === 'team' ? 'Choose a manager to view their team:' : 'Choose the first manager to compare:'
+			: 'Choose the second manager to compare:',
+		reply_markup: managerKeyboard(members, action, firstEntryId),
+	});
+}
+
+function configuredLeague(chatId, env) {
+	if (env.TG_CHAT_ID && chatId === String(env.TG_CHAT_ID) && env.FPL_LEAGUE_ID) {
+		return { leagueId: env.FPL_LEAGUE_ID, mode: 'quarter' };
+	}
+	if (env.TG_CHAT_ID_2 && chatId === String(env.TG_CHAT_ID_2) && env.FPL_LEAGUE_ID_2) {
+		return { leagueId: env.FPL_LEAGUE_ID_2, mode: 'four_week' };
+	}
+	return undefined;
+}
+
+async function handleCallbackQuery(callback, env) {
+	const chatId = callback.message?.chat?.id;
+	if (!chatId) return;
+	await telegramCall(env, 'answerCallbackQuery', { callback_query_id: callback.id });
+	const config = configuredLeague(String(chatId), env);
+	if (!config) {
+		await telegramCall(env, 'sendMessage', { chat_id: String(chatId), text: 'This chat is not configured for this bot.' });
+		return;
+	}
+	const parts = (callback.data || '').split(':');
+	try {
+		if (parts[0] === 'team' && parts.length === 2 && /^\d+$/.test(parts[1])) {
+			const text = await teamText(config.leagueId, '', parts[1]);
+			await telegramCall(env, 'sendMessage', { chat_id: String(chatId), text });
+		} else if (parts[0] === 'rival' && parts.length === 2 && /^\d+$/.test(parts[1])) {
+			await sendManagerChoices(env, String(chatId), config.leagueId, 'rival', parts[1]);
+		} else if (parts[0] === 'rival2' && parts.length === 3 && parts.slice(1).every((part) => /^\d+$/.test(part))) {
+			const data = await getHistoryRows(config.leagueId);
+			const gw = getCurrentGameweek(data);
+			const text = buildRivalEntryComparison(data, gw, parts[1], parts[2]);
+			await telegramCall(env, 'sendMessage', { chat_id: String(chatId), text });
+		}
+	} catch (error) {
+		console.error('Failed to process manager selection:', error);
+		await telegramCall(env, 'sendMessage', {
+			chat_id: String(chatId),
+			text: 'Sorry, I could not load that manager right now. Please try again shortly.',
+		});
+	}
+}
+
 async function commandText(command, args, leagueId, mode) {
 	if (command === '/score') return scoreText(leagueId, mode);
 	if (['/table', '/form', '/gw', '/rival', '/banter'].includes(command)) {
@@ -291,11 +401,17 @@ async function commandText(command, args, leagueId, mode) {
 		return buildBanterMessage(data, gw);
 	}
 	if (command === '/fixtures') return fixturesText();
+	if (command === '/team' && args.length === 0) return undefined;
 	if (command === '/team') return teamText(leagueId, args.join(' '));
+	if (command === '/rival' && args.length === 0) return undefined;
 	return undefined;
 }
 
 async function handleTelegramUpdate(update, env) {
+	if (update.callback_query) {
+		await handleCallbackQuery(update.callback_query, env);
+		return;
+	}
 	const message = update.message;
 	if (!message?.text || !message.chat?.id) return;
 	const [rawCommand, ...args] = message.text.trim().split(/\s+/);
@@ -305,21 +421,14 @@ async function handleTelegramUpdate(update, env) {
 	if (command === '/start' || command === '/help') {
 		await telegramCall(env, 'sendMessage', {
 			chat_id: chatId,
-			text: 'FPL commands:\n/score - league score and prizes\n/table - overall standings\n/form - points over the last 5 gameweeks\n/gw - latest gameweek standings\n/rival <name> [vs <name>] - compare managers\n/banter - weekly bragging rights\n/fixtures - next fixtures and toughest runs\n/team <name> - show a manager’s picks',
+			text: 'FPL commands:\n/score - league score and prizes\n/table - overall standings\n/form - points over the last 5 gameweeks\n/gw - latest gameweek standings\n/rival - tap two managers to compare (or type names)\n/banter - weekly bragging rights\n/fixtures - next fixtures and toughest runs\n/team - tap a manager to view their picks (or type a name)',
 		});
 		return;
 	}
 	if (!['/score', '/table', '/form', '/gw', '/rival', '/banter', '/fixtures', '/team'].includes(command)) return;
 
-	let leagueId;
-	let mode;
-	if (env.TG_CHAT_ID && chatId === String(env.TG_CHAT_ID) && env.FPL_LEAGUE_ID) {
-		leagueId = env.FPL_LEAGUE_ID;
-		mode = 'quarter';
-	} else if (env.TG_CHAT_ID_2 && chatId === String(env.TG_CHAT_ID_2) && env.FPL_LEAGUE_ID_2) {
-		leagueId = env.FPL_LEAGUE_ID_2;
-		mode = 'four_week';
-	} else {
+	const config = configuredLeague(chatId, env);
+	if (!config) {
 		await telegramCall(env, 'sendMessage', {
 			chat_id: chatId,
 			text: 'This chat is not configured for this bot.',
@@ -328,7 +437,15 @@ async function handleTelegramUpdate(update, env) {
 	}
 
 	try {
-		const text = await commandText(command, args, leagueId, mode);
+		if (command === '/team' && args.length === 0) {
+			await sendManagerChoices(env, chatId, config.leagueId, 'team');
+			return;
+		}
+		if (command === '/rival' && args.length === 0) {
+			await sendManagerChoices(env, chatId, config.leagueId, 'rival');
+			return;
+		}
+		const text = await commandText(command, args, config.leagueId, config.mode);
 		await telegramCall(env, 'sendMessage', { chat_id: chatId, text });
 	} catch (error) {
 		console.error('Failed to build score response:', error);
@@ -362,7 +479,7 @@ export default {
 				const result = await telegramCall(env, 'setWebhook', {
 					url: `${url.origin}/telegram-webhook`,
 					secret_token: env.TELEGRAM_WEBHOOK_SECRET,
-					allowed_updates: ['message'],
+					allowed_updates: ['message', 'callback_query'],
 				});
 				return Response.json({ ok: true, webhook_registered: result });
 			} catch (error) {

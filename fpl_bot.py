@@ -1,3 +1,4 @@
+import json
 import os
 import re
 import time
@@ -28,10 +29,21 @@ def get(path):
     return requests.get(f'{BASE}/{path}', headers=HEADERS, timeout=20).json()
 
 
-def send_message(chat_id, text):
+def send_message(chat_id, text, reply_markup=None):
+    data = {'chat_id': chat_id, 'text': text}
+    if reply_markup:
+        data['reply_markup'] = json.dumps(reply_markup)
     requests.post(
         f'{TELEGRAM_BASE}/sendMessage',
-        data={'chat_id': chat_id, 'text': text},
+        data=data,
+        timeout=20,
+    )
+
+
+def answer_callback(callback_id):
+    requests.post(
+        f'{TELEGRAM_BASE}/answerCallbackQuery',
+        data={'callback_query_id': callback_id},
         timeout=20,
     )
 
@@ -213,15 +225,21 @@ def build_fixtures_text():
     return '\n'.join(lines)
 
 
-def build_team_text(league_id, query):
+def build_team_text(league_id, query, selected_entry_id=None):
     standings = get(f'leagues-classic/{league_id}/standings/')
     members = standings.get('standings', {}).get('results', [])
-    member, error = find_manager(
-        [(item['player_name'], item['entry']) for item in members], query,
-    )
-    if error:
-        return error
-    name, entry_id = member
+    if selected_entry_id is not None:
+        member = next((item for item in members if str(item['entry']) == str(selected_entry_id)), None)
+        if member is None:
+            return 'That manager is no longer in this league. Please run /team again.'
+    else:
+        selected, error = find_manager(
+            [(item['player_name'], item['entry']) for item in members], query,
+        )
+        if error:
+            return error
+        member = next(item for item in members if str(item['entry']) == str(selected[1]))
+    name, entry_id = member['player_name'], member['entry']
     bootstrap = get('bootstrap-static/')
     history = get(f'entry/{entry_id}/history/')
     current_event = next((event['id'] for event in bootstrap.get('events', []) if event.get('is_current')), None)
@@ -247,6 +265,88 @@ def build_team_text(league_id, query):
     if bench:
         lines.extend(['', f"Bench: {', '.join(bench)}"])
     return '\n'.join(lines)
+
+
+def manager_keyboard(members, action, first_entry_id=None):
+    candidates = [member for member in members if first_entry_id is None or str(member['entry']) != str(first_entry_id)]
+    prefix = action if first_entry_id is None else f'{action}2:{first_entry_id}'
+    buttons = []
+    for member in candidates:
+        team_name = member.get('entry_name')
+        label = member['player_name']
+        if team_name and team_name != label:
+            label += f' · {team_name}'
+        label = ''.join(list(label)[:64])
+        buttons.append({
+            'text': label,
+            'callback_data': f"{prefix}:{member['entry']}",
+        })
+    return {'inline_keyboard': [buttons[index:index + 2] for index in range(0, len(buttons), 2)]}
+
+
+def send_manager_choices(chat_id, league_id, action, first_entry_id=None):
+    standings = get(f'leagues-classic/{league_id}/standings/')
+    members = standings.get('standings', {}).get('results', [])
+    candidates = [member for member in members if first_entry_id is None or str(member['entry']) != str(first_entry_id)]
+    if not candidates:
+        send_message(chat_id, 'No other managers are available to compare.')
+        return
+    if first_entry_id is None:
+        prompt = 'Choose a manager to view their team:' if action == 'team' else 'Choose the first manager to compare:'
+    else:
+        prompt = 'Choose the second manager to compare:'
+    send_message(chat_id, prompt, manager_keyboard(members, action, first_entry_id))
+
+
+def build_selected_rival_text(league_id, first_entry_id, second_entry_id):
+    standings = get(f'leagues-classic/{league_id}/standings/')
+    members = standings.get('standings', {}).get('results', [])
+    selected = [next((member for member in members if str(member['entry']) == str(entry_id)), None)
+                for entry_id in (first_entry_id, second_entry_id)]
+    if any(member is None for member in selected):
+        return 'A manager in that selection is no longer in this league. Please try /rival again.'
+    league_data = get_history_rows(league_id)
+    gw = max(event['event'] for _, history in league_data for event in history)
+    weeks = sorted({event['event'] for _, history in league_data for event in history}, reverse=True)[:5]
+    metrics = []
+    for member in selected:
+        history = get(f"entry/{member['entry']}/history/").get('current', [])
+        metrics.append((
+            member['player_name'],
+            sum(net_points(event) for event in history if event['event'] <= gw),
+            sum(net_points(event) for event in history if event['event'] in weeks),
+        ))
+    first, second = metrics
+    season_leader = first[0] if first[1] >= second[1] else second[0]
+    recent_leader = first[0] if first[2] >= second[2] else second[0]
+    return '\n'.join([
+        f'🆚 {first[0]} vs {second[0]} — GW{gw}',
+        f'Season: {first[0]} {first[1]} pts, {second[0]} {second[1]} pts ({season_leader} +{abs(first[1] - second[1])})',
+        f'Last {len(weeks)} GWs: {first[0]} {first[2]} pts, {second[0]} {second[2]} pts ({recent_leader} +{abs(first[2] - second[2])})',
+    ])
+
+
+def handle_callback(callback):
+    answer_callback(callback['id'])
+    chat_id = callback.get('message', {}).get('chat', {}).get('id')
+    if chat_id is None:
+        return
+    chat_id_str = str(chat_id)
+    if MAIN_LEAGUE_ID and MAIN_CHAT_ID and chat_id_str == str(MAIN_CHAT_ID):
+        league_id = MAIN_LEAGUE_ID
+    elif SECOND_LEAGUE_ID and SECOND_CHAT_ID and chat_id_str == str(SECOND_CHAT_ID):
+        league_id = SECOND_LEAGUE_ID
+    else:
+        send_message(chat_id, 'This chat is not configured for this bot.')
+        return
+
+    parts = callback.get('data', '').split(':')
+    if parts[0] == 'team' and len(parts) == 2 and parts[1].isdigit():
+        send_message(chat_id, build_team_text(league_id, '', parts[1]))
+    elif parts[0] == 'rival' and len(parts) == 2 and parts[1].isdigit():
+        send_manager_choices(chat_id, league_id, 'rival', parts[1])
+    elif parts[0] == 'rival2' and len(parts) == 3 and all(part.isdigit() for part in parts[1:]):
+        send_message(chat_id, build_selected_rival_text(league_id, parts[1], parts[2]))
 
 
 def build_command_text(command, args, league_id, mode):
@@ -284,8 +384,8 @@ def handle_command(text, chat_id):
         help_text = (
             'FPL commands:\n/score - league score and prizes\n/table - overall standings\n'
             '/form - points over the last 5 gameweeks\n/gw - latest gameweek standings\n'
-            '/rival <name> [vs <name>] - compare managers\n/banter - weekly bragging rights\n'
-            '/fixtures - next fixtures and toughest runs\n/team <name> - show a manager’s picks'
+            '/rival - tap two managers to compare (or type names)\n/banter - weekly bragging rights\n'
+            '/fixtures - next fixtures and toughest runs\n/team - tap a manager to view picks (or type a name)'
         )
         send_message(chat_id, help_text)
         return
@@ -302,6 +402,13 @@ def handle_command(text, chat_id):
         send_message(chat_id, 'This chat is not configured for this bot.')
         return
 
+    if command == '/team' and not args:
+        send_manager_choices(chat_id, league_id, 'team')
+        return
+    if command == '/rival' and not args:
+        send_manager_choices(chat_id, league_id, 'rival')
+        return
+
     send_message(chat_id, build_command_text(command, args, league_id, mode))
 
 
@@ -309,7 +416,11 @@ def poll_updates():
     last_update = 0
     while True:
         url = f'{TELEGRAM_BASE}/getUpdates'
-        params = {'timeout': 30, 'offset': last_update + 1}
+        params = {
+            'timeout': 30,
+            'offset': last_update + 1,
+            'allowed_updates': json.dumps(['message', 'callback_query']),
+        }
         try:
             response = requests.get(url, params=params, timeout=60)
             response.raise_for_status()
@@ -320,6 +431,10 @@ def poll_updates():
 
         for update in updates:
             last_update = max(last_update, update['update_id'])
+            callback = update.get('callback_query')
+            if callback:
+                handle_callback(callback)
+                continue
             message = update.get('message')
             if not message:
                 continue
