@@ -23,6 +23,42 @@ beforeEach(() => {
 	fplCalls.length = 0;
 	globalThis.fetch = async (input, init = {}) => {
 		const url = String(input);
+		if (url.includes('/bootstrap-static/')) {
+			fplCalls.push(url);
+			return Response.json({
+				events: [1, 2, 3, 4].map((id) => ({ id, finished: true, is_current: id === 4, is_next: false }))
+					.concat([{ id: 5, finished: false, is_current: false, is_next: true }, { id: 6, finished: false, is_current: false, is_next: false }]),
+				teams: [
+					{ id: 1, name: 'Alpha FC', short_name: 'ALP' },
+					{ id: 2, name: 'Beta FC', short_name: 'BET' },
+				],
+				elements: [
+					{ id: 101, web_name: 'Keeper', element_type: 1 },
+					{ id: 102, web_name: 'Captain', element_type: 2 },
+					{ id: 103, web_name: 'Midfielder', element_type: 3 },
+					{ id: 104, web_name: 'Forward', element_type: 4 },
+					...Array.from({ length: 11 }, (_, i) => ({ id: 105 + i, web_name: `Player${i}`, element_type: i < 3 ? 2 : i < 7 ? 3 : 4 })),
+				],
+			});
+		}
+		if (url.includes('/fixtures/')) {
+			fplCalls.push(url);
+			return Response.json([
+				{ event: 5, team_h: 1, team_a: 2, team_h_difficulty: 5, team_a_difficulty: 2, kickoff_time: '2026-10-24T12:30:00Z' },
+				{ event: 6, team_h: 2, team_a: 1, team_h_difficulty: 3, team_a_difficulty: 4, kickoff_time: '2026-10-31T12:30:00Z' },
+			]);
+		}
+		if (url.includes('/event/4/picks/')) {
+			fplCalls.push(url);
+			return Response.json({ picks: [
+				{ element: 101, position: 1 },
+				{ element: 102, position: 2, is_captain: true },
+				{ element: 103, position: 3, is_vice_captain: true },
+				{ element: 104, position: 4 },
+				...Array.from({ length: 7 }, (_, i) => ({ element: 105 + i, position: 5 + i })),
+				{ element: 113, position: 12 },
+			] });
+		}
 		if (url.includes('/leagues-classic/')) {
 			fplCalls.push(url);
 			return Response.json({ standings: { results: [
@@ -77,6 +113,55 @@ test('second group gets four-week standings only', async () => {
 	assert.equal(response.status, 200);
 	assert.match(telegramReplies.at(-1).text, /4GW block: GW1–GW4/);
 	assert.match(fplCalls[0], /second-league/);
+});
+
+test('table, form, and gameweek commands show the expected rankings', async () => {
+	await postUpdate(-1001, '/table');
+	assert.match(telegramReplies.at(-1).text, /Overall standings through GW4/);
+	assert.match(telegramReplies.at(-1).text, /1\. Beta: 90 pts/);
+
+	await postUpdate(-1001, '/form');
+	assert.match(telegramReplies.at(-1).text, /Form over GW1–GW4/);
+	assert.match(telegramReplies.at(-1).text, /Beta: 90 pts/);
+
+	await postUpdate(-1001, '/gw');
+	assert.match(telegramReplies.at(-1).text, /GW4 league table/);
+	assert.match(telegramReplies.at(-1).text, /Beta: 24 pts/);
+});
+
+test('rival and banter commands use the configured league', async () => {
+	await postUpdate(-1001, '/rival alpha');
+	assert.match(telegramReplies.at(-1).text, /Alpha — GW4/);
+	assert.match(telegramReplies.at(-1).text, /Last 4 GWs: 50 pts/);
+
+	await postUpdate(-1001, '/rival Alpha vs Beta');
+	assert.match(telegramReplies.at(-1).text, /Alpha vs Beta — GW4/);
+	assert.match(telegramReplies.at(-1).text, /Beta \+40/);
+
+	await postUpdate(-1001, '/banter');
+	assert.match(telegramReplies.at(-1).text, /Beta takes this week’s bragging rights/);
+	assert.match(telegramReplies.at(-1).text, /Alpha, there’s plenty of season left/);
+});
+
+test('fixtures command shows the next round and difficult runs', async () => {
+	await postUpdate(-1001, '/fixtures');
+	assert.match(telegramReplies.at(-1).text, /GW5 fixtures/);
+	assert.match(telegramReplies.at(-1).text, /ALP v BET/);
+	assert.match(telegramReplies.at(-1).text, /Toughest next 2-GW run/);
+});
+
+test('team command displays a manager’s starting picks, captain, and bench', async () => {
+	await postUpdate(-1001, '/team Alpha');
+	assert.match(telegramReplies.at(-1).text, /Alpha’s GW4 team/);
+	assert.match(telegramReplies.at(-1).text, /Captain \(C\)/);
+	assert.match(telegramReplies.at(-1).text, /Midfielder \(VC\)/);
+	assert.match(telegramReplies.at(-1).text, /Bench: Player8/);
+});
+
+test('/help lists the expanded command set', async () => {
+	await postUpdate(-1001, '/help');
+	assert.match(telegramReplies.at(-1).text, /\/fixtures/);
+	assert.match(telegramReplies.at(-1).text, /\/team <name>/);
 });
 
 test('unconfigured group cannot receive either league score', async () => {

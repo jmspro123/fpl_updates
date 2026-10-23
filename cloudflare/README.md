@@ -1,6 +1,17 @@
 # FPL Telegram bot on Cloudflare Workers
 
-This Worker receives Telegram webhooks and answers `/score` for the configured league associated with the current chat. It replaces the continuously polling `fpl_bot.py` process for hosted command replies. The Tuesday scheduled update remains in GitHub Actions and is unchanged.
+This Worker receives Telegram webhooks and answers FPL commands for the league associated with the current chat. It replaces the continuously polling `fpl_bot.py` process for hosted command replies. The Tuesday scheduled update remains in GitHub Actions and is unchanged.
+
+Available Telegram commands:
+
+- `/score` — league score and prize summary.
+- `/table` — overall standings and points behind the leader.
+- `/form` — standings over the last five available gameweeks.
+- `/gw` — latest gameweek standings.
+- `/rival <name>` — show a manager’s season and recent form ranks; `/rival <name 1> vs <name 2>` compares two managers directly.
+- `/banter` — friendly weekly bragging-rights recap.
+- `/fixtures` — next gameweek’s fixtures and the toughest upcoming fixture runs.
+- `/team <manager name>` — show a league manager’s picks, captain, vice-captain, and bench when FPL makes the picks available.
 
 ## Deploy from GitHub
 
