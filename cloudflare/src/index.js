@@ -350,6 +350,36 @@ async function recommendationsText(captainOnly = false) {
 	return lines.join('\n');
 }
 
+function formatTransferTime(value) {
+	const date = new Date(value);
+	if (Number.isNaN(date.getTime())) return 'time unavailable';
+	return `${new Intl.DateTimeFormat('en-GB', {
+		day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit', timeZone: 'UTC',
+	}).format(date).replace(',', '')} UTC`;
+}
+
+async function movesText(leagueId) {
+	const [standings, bootstrap] = await Promise.all([
+		fplGet(`leagues-classic/${leagueId}/standings/`),
+		fplGet('bootstrap-static/'),
+	]);
+	const members = standings?.standings?.results || [];
+	if (members.length === 0) return 'No managers were found in this league.';
+	const playerNames = new Map((bootstrap.elements || []).map((player) => [player.id, player.web_name]));
+	const transfers = (await Promise.all(members.map(async (member) => {
+		const history = await fplGet(`entry/${member.entry}/transfers/`);
+		return (history || []).map((transfer) => ({ ...transfer, manager: member.player_name }));
+	}))).flat().sort((a, b) => new Date(b.time).getTime() - new Date(a.time).getTime()).slice(0, 15);
+	if (transfers.length === 0) return 'No transfers have been recorded in this league yet.';
+	const lines = [`🔄 Latest league transfers (${transfers.length} shown):`];
+	for (const transfer of transfers) {
+		const playerIn = playerNames.get(transfer.element_in) || `Player ${transfer.element_in}`;
+		const playerOut = playerNames.get(transfer.element_out) || `Player ${transfer.element_out}`;
+		lines.push(`GW${transfer.event} · ${transfer.manager}: ${playerOut} → ${playerIn} · ${formatTransferTime(transfer.time)}`);
+	}
+	return lines.join('\n');
+}
+
 async function teamText(leagueId, query, selectedEntryId) {
 	const standings = await fplGet(`leagues-classic/${leagueId}/standings/`);
 	const members = standings?.standings?.results || [];
@@ -479,6 +509,7 @@ async function commandText(command, args, leagueId, mode) {
 		return buildBanterMessage(data, gw);
 	}
 	if (command === '/fixtures') return fixturesText();
+	if (command === '/moves') return movesText(leagueId);
 	if (command === '/recommend') return recommendationsText();
 	if (command === '/captain') return recommendationsText(true);
 	if (command === '/team' && args.length === 0) return undefined;
@@ -501,11 +532,11 @@ async function handleTelegramUpdate(update, env) {
 	if (command === '/start' || command === '/help') {
 		await telegramCall(env, 'sendMessage', {
 			chat_id: chatId,
-			text: 'FPL commands:\n/score - league score and prizes\n/table - overall standings\n/form - points over the last 5 gameweeks\n/gw - latest gameweek standings\n/rival - tap two managers to compare (or type names)\n/banter - weekly bragging rights\n/fixtures - next fixtures and toughest runs\n/recommend - stats-based picks by position\n/captain - captain shortlist\n/team - tap a manager to view their picks (or type a name)',
+			text: 'FPL commands:\n/score - league score and prizes\n/table - overall standings\n/form - points over the last 5 gameweeks\n/gw - latest gameweek standings\n/rival - tap two managers to compare (or type names)\n/moves - latest league transfers\n/banter - weekly bragging rights\n/fixtures - next fixtures and toughest runs\n/recommend - stats-based picks by position\n/captain - captain shortlist\n/team - tap a manager to view their picks (or type a name)',
 		});
 		return;
 	}
-	if (!['/score', '/table', '/form', '/gw', '/rival', '/banter', '/fixtures', '/recommend', '/captain', '/team'].includes(command)) return;
+	if (!['/score', '/table', '/form', '/gw', '/rival', '/moves', '/banter', '/fixtures', '/recommend', '/captain', '/team'].includes(command)) return;
 
 	const config = configuredLeague(chatId, env);
 	if (!config) {

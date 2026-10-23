@@ -9,6 +9,7 @@ Available Telegram commands:
 - `/form` — standings over the last five available gameweeks.
 - `/gw` — latest gameweek standings.
 - `/rival` — select two managers from Telegram buttons to compare them; typed names still work as well.
+- `/moves` — the 15 most recent transfers across the league, with manager, gameweek, player names, and timestamp.
 - `/banter` — friendly weekly bragging-rights recap.
 - `/fixtures` — next gameweek’s fixtures and the toughest upcoming fixture runs.
 - `/recommend` — a stats-based shortlist by position using form, points per game, minutes, availability, price, and fixture difficulty.

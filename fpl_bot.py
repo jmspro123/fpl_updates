@@ -2,6 +2,7 @@ import json
 import os
 import re
 import time
+from datetime import datetime, timezone
 
 import requests
 
@@ -312,6 +313,40 @@ def build_recommendations_text(captain_only=False):
     return '\n'.join(lines)
 
 
+def format_transfer_time(value):
+    try:
+        timestamp = datetime.fromisoformat(value.replace('Z', '+00:00'))
+    except (AttributeError, ValueError):
+        return 'time unavailable'
+    return timestamp.astimezone(timezone.utc).strftime('%d %b %H:%M UTC')
+
+
+def build_moves_text(league_id):
+    standings = get(f'leagues-classic/{league_id}/standings/')
+    members = standings.get('standings', {}).get('results', [])
+    if not members:
+        return 'No managers were found in this league.'
+    bootstrap = get('bootstrap-static/')
+    player_names = {player['id']: player['web_name'] for player in bootstrap.get('elements', [])}
+    transfers = []
+    for member in members:
+        history = get(f"entry/{member['entry']}/transfers/")
+        transfers.extend({**transfer, 'manager': member['player_name']} for transfer in history)
+    transfers.sort(key=lambda transfer: transfer.get('time', ''), reverse=True)
+    transfers = transfers[:15]
+    if not transfers:
+        return 'No transfers have been recorded in this league yet.'
+    lines = [f'🔄 Latest league transfers ({len(transfers)} shown):']
+    for transfer in transfers:
+        player_in = player_names.get(transfer['element_in'], f"Player {transfer['element_in']}")
+        player_out = player_names.get(transfer['element_out'], f"Player {transfer['element_out']}")
+        timestamp = format_transfer_time(transfer.get('time'))
+        lines.append(
+            f"GW{transfer['event']} · {transfer['manager']}: {player_out} → {player_in} · {timestamp}"
+        )
+    return '\n'.join(lines)
+
+
 def build_team_text(league_id, query, selected_entry_id=None):
     standings = get(f'leagues-classic/{league_id}/standings/')
     members = standings.get('standings', {}).get('results', [])
@@ -453,6 +488,8 @@ def build_command_text(command, args, league_id, mode):
         return build_banter_text(data, gw)
     if command == '/fixtures':
         return build_fixtures_text()
+    if command == '/moves':
+        return build_moves_text(league_id)
     if command == '/recommend':
         return build_recommendations_text()
     if command == '/captain':
@@ -476,13 +513,14 @@ def handle_command(text, chat_id):
             'FPL commands:\n/score - league score and prizes\n/table - overall standings\n'
             '/form - points over the last 5 gameweeks\n/gw - latest gameweek standings\n'
             '/rival - tap two managers to compare (or type names)\n/banter - weekly bragging rights\n'
+            '/moves - latest league transfers\n'
             '/fixtures - next fixtures and toughest runs\n/recommend - stats-based picks by position\n'
             '/captain - captain shortlist\n/team - tap a manager to view picks (or type a name)'
         )
         send_message(chat_id, help_text)
         return
 
-    commands = {'/score', '/table', '/form', '/gw', '/rival', '/banter', '/fixtures', '/recommend', '/captain', '/team'}
+    commands = {'/score', '/table', '/form', '/gw', '/rival', '/moves', '/banter', '/fixtures', '/recommend', '/captain', '/team'}
     if command not in commands:
         return
 

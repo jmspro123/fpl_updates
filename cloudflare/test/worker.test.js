@@ -59,6 +59,13 @@ beforeEach(() => {
 				{ element: 113, position: 12 },
 			] });
 		}
+		if (url.includes('/transfers/')) {
+			fplCalls.push(url);
+			const entry = Number(url.match(/entry\/(\d+)/)[1]);
+			return Response.json(entry === 11
+				? [{ event: 5, element_in: 103, element_out: 102, time: '2026-10-24T10:00:00Z' }]
+				: [{ event: 5, element_in: 104, element_out: 101, time: '2026-10-24T11:00:00Z' }]);
+		}
 		if (url.includes('/leagues-classic/')) {
 			fplCalls.push(url);
 			return Response.json({ standings: { results: [
@@ -186,6 +193,14 @@ test('/captain returns a top three shortlist with a form caveat', async () => {
 	assert.match(text, /not predictions or guarantees/);
 });
 
+test('/moves shows the latest league transfers first with player names', async () => {
+	await postUpdate(-1001, '/moves');
+	const text = telegramReplies.at(-1).text;
+	assert.match(text, /Latest league transfers \(2 shown\)/);
+	assert.ok(text.indexOf('Beta: Keeper → Forward') < text.indexOf('Alpha: Captain → Midfielder'));
+	assert.match(text, /GW5 · Beta: Keeper → Forward · 24 Oct 11:00 UTC/);
+});
+
 test('team command displays a manager’s starting picks, captain, and bench', async () => {
 	await postUpdate(-1001, '/team Alpha');
 	assert.match(telegramReplies.at(-1).text, /Alpha’s GW4 team/);
@@ -227,6 +242,7 @@ test('/help lists the expanded command set', async () => {
 	assert.match(telegramReplies.at(-1).text, /\/rival - tap two managers/);
 	assert.match(telegramReplies.at(-1).text, /\/recommend/);
 	assert.match(telegramReplies.at(-1).text, /\/captain/);
+	assert.match(telegramReplies.at(-1).text, /\/moves/);
 });
 
 test('unconfigured group cannot receive either league score', async () => {
