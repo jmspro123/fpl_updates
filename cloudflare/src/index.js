@@ -272,6 +272,84 @@ async function fixturesText() {
 	return lines.join('\n');
 }
 
+function getNextGameweek(bootstrap) {
+	const events = bootstrap.events || [];
+	const latestFinished = Math.max(0, ...events.filter((event) => event.finished).map((event) => event.id));
+	return events.find((event) => event.is_next)
+		|| events.find((event) => event.is_current && !event.finished)
+		|| events.find((event) => event.id > latestFinished);
+}
+
+function rankPlayerPicks(bootstrap, fixtures, gameweek, positions) {
+	const teams = new Map((bootstrap.teams || []).map((team) => [team.id, team]));
+	const fixtureByTeam = new Map();
+	for (const fixture of fixtures.filter((item) => item.event === gameweek)) {
+		const home = teams.get(fixture.team_h);
+		const away = teams.get(fixture.team_a);
+		if (home) fixtureByTeam.set(fixture.team_h, {
+			opponent: away?.short_name || 'TBC',
+			venue: 'H',
+			difficulty: fixture.team_h_difficulty ?? 3,
+		});
+		if (away) fixtureByTeam.set(fixture.team_a, {
+			opponent: home?.short_name || 'TBC',
+			venue: 'A',
+			difficulty: fixture.team_a_difficulty ?? 3,
+		});
+	}
+	return (bootstrap.elements || []).filter((player) => positions.includes(player.element_type)
+		&& player.now_cost > 0
+		&& (!player.status || player.status === 'a')
+		&& player.chance_of_playing_next_round !== 0)
+		.map((player) => {
+			const fixture = fixtureByTeam.get(player.team);
+			const form = Number(player.form) || 0;
+			const pointsPerGame = Number(player.points_per_game) || 0;
+			const minutes = Number(player.minutes) || 0;
+			const difficulty = fixture?.difficulty ?? 3;
+			const score = form * 0.45 + pointsPerGame * 0.35 + (5 - difficulty) * 0.45 + Math.min(minutes / 1800, 1) * 0.75;
+			return {
+				name: player.web_name,
+				position: player.element_type,
+				team: teams.get(player.team)?.short_name || 'TBC',
+				price: player.now_cost / 10,
+				form,
+				pointsPerGame,
+				fixture: fixture ? `${fixture.venue} ${fixture.opponent} (FDR ${fixture.difficulty})` : 'fixture TBD',
+				score,
+			};
+		}).sort((a, b) => b.score - a.score);
+}
+
+async function recommendationsText(captainOnly = false) {
+	const [bootstrap, fixtures] = await Promise.all([fplGet('bootstrap-static/'), fplGet('fixtures/')]);
+	const nextEvent = getNextGameweek(bootstrap);
+	if (!nextEvent) return 'No upcoming gameweek is currently available for recommendations.';
+	const positionNames = new Map([[1, 'GK'], [2, 'DEF'], [3, 'MID'], [4, 'FWD']]);
+	const playerPositions = captainOnly ? [3, 4] : [1, 2, 3, 4];
+	const ranked = rankPlayerPicks(bootstrap, fixtures, nextEvent.id, playerPositions);
+	if (ranked.length === 0) return 'No available player recommendations were found for the next gameweek.';
+	if (captainOnly) {
+		const shortlist = ranked.slice(0, 3);
+		const lines = [`© GW${nextEvent.id} captain shortlist (form, minutes & fixture-based):`];
+		shortlist.forEach((player, index) => {
+			const label = index === 0 ? '⭐ Suggested captain' : index === 1 ? 'Vice-captain option' : 'Alternative';
+			lines.push(`${label}: ${player.name} (${player.team}, ${player.fixture}; form ${player.form})`);
+		});
+		lines.push('', 'These are stats-based suggestions, not predictions or guarantees.');
+		return lines.join('\n');
+	}
+	const lines = [`💡 GW${nextEvent.id} suggested picks (stats-based):`];
+	for (const [position, name] of positionNames) {
+		const candidates = ranked.filter((player) => player.position === position).slice(0, 2);
+		if (candidates.length) {
+			lines.push('', `${name}:`, ...candidates.map((player) => `• ${player.name} (${player.team}, £${player.price.toFixed(1)}m, form ${player.form}; ${player.fixture})`));
+		}
+	}
+	lines.push('', 'Uses recent form, points per game, minutes, availability and fixture difficulty; not a guarantee of points.');
+	return lines.join('\n');
+}
+
 async function teamText(leagueId, query, selectedEntryId) {
 	const standings = await fplGet(`leagues-classic/${leagueId}/standings/`);
 	const members = standings?.standings?.results || [];
@@ -401,6 +479,8 @@ async function commandText(command, args, leagueId, mode) {
 		return buildBanterMessage(data, gw);
 	}
 	if (command === '/fixtures') return fixturesText();
+	if (command === '/recommend') return recommendationsText();
+	if (command === '/captain') return recommendationsText(true);
 	if (command === '/team' && args.length === 0) return undefined;
 	if (command === '/team') return teamText(leagueId, args.join(' '));
 	if (command === '/rival' && args.length === 0) return undefined;
@@ -421,11 +501,11 @@ async function handleTelegramUpdate(update, env) {
 	if (command === '/start' || command === '/help') {
 		await telegramCall(env, 'sendMessage', {
 			chat_id: chatId,
-			text: 'FPL commands:\n/score - league score and prizes\n/table - overall standings\n/form - points over the last 5 gameweeks\n/gw - latest gameweek standings\n/rival - tap two managers to compare (or type names)\n/banter - weekly bragging rights\n/fixtures - next fixtures and toughest runs\n/team - tap a manager to view their picks (or type a name)',
+			text: 'FPL commands:\n/score - league score and prizes\n/table - overall standings\n/form - points over the last 5 gameweeks\n/gw - latest gameweek standings\n/rival - tap two managers to compare (or type names)\n/banter - weekly bragging rights\n/fixtures - next fixtures and toughest runs\n/recommend - stats-based picks by position\n/captain - captain shortlist\n/team - tap a manager to view their picks (or type a name)',
 		});
 		return;
 	}
-	if (!['/score', '/table', '/form', '/gw', '/rival', '/banter', '/fixtures', '/team'].includes(command)) return;
+	if (!['/score', '/table', '/form', '/gw', '/rival', '/banter', '/fixtures', '/recommend', '/captain', '/team'].includes(command)) return;
 
 	const config = configuredLeague(chatId, env);
 	if (!config) {

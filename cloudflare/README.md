@@ -11,7 +11,12 @@ Available Telegram commands:
 - `/rival` — select two managers from Telegram buttons to compare them; typed names still work as well.
 - `/banter` — friendly weekly bragging-rights recap.
 - `/fixtures` — next gameweek’s fixtures and the toughest upcoming fixture runs.
+- `/recommend` — a stats-based shortlist by position using form, points per game, minutes, availability, price, and fixture difficulty.
+- `/captain` — a top-three captain shortlist based on form, minutes, and fixture difficulty.
 - `/team` — select a manager from Telegram buttons to view their picks, captain, vice-captain, and bench when FPL makes the picks available. A typed manager name still works too.
+
+Recommendations are general stats-based suggestions, not personalized transfer advice or guaranteed points.
+To show these commands in Telegram's slash-command menu, add them with BotFather using `/setcommands`.
 
 After deploying a version that adds callback buttons, call the protected `/setup` endpoint once again so Telegram registers callback-query updates with the webhook. No new secret or Cloudflare variable is needed.
 
@@ -35,8 +40,7 @@ Generate two different random values for `TELEGRAM_WEBHOOK_SECRET` and `SETUP_SE
 6. Register Telegram's webhook by making a POST request to `https://YOUR-WORKER.YOUR-SUBDOMAIN.workers.dev/setup` with an `Authorization: Bearer YOUR_SETUP_SECRET` header. For example, in a terminal, replace the URL, then enter your setup secret when prompted (input is hidden):
 
    ```sh
-   read -s "SETUP_SECRET?Cloudflare SETUP_SECRET: "
-   echo
+   read -r -s -p "Cloudflare SETUP_SECRET: " SETUP_SECRET; echo
    curl -X POST "https://YOUR-WORKER.YOUR-SUBDOMAIN.workers.dev/setup" \
      -H "Authorization: Bearer $SETUP_SECRET"
    unset SETUP_SECRET

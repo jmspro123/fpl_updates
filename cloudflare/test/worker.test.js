@@ -33,11 +33,11 @@ beforeEach(() => {
 					{ id: 2, name: 'Beta FC', short_name: 'BET' },
 				],
 				elements: [
-					{ id: 101, web_name: 'Keeper', element_type: 1 },
-					{ id: 102, web_name: 'Captain', element_type: 2 },
-					{ id: 103, web_name: 'Midfielder', element_type: 3 },
-					{ id: 104, web_name: 'Forward', element_type: 4 },
-					...Array.from({ length: 11 }, (_, i) => ({ id: 105 + i, web_name: `Player${i}`, element_type: i < 3 ? 2 : i < 7 ? 3 : 4 })),
+					{ id: 101, web_name: 'Keeper', element_type: 1, team: 1, now_cost: 45, form: '5', points_per_game: '4', minutes: 1000, status: 'a' },
+					{ id: 102, web_name: 'Captain', element_type: 2, team: 1, now_cost: 55, form: '8', points_per_game: '6', minutes: 1000, status: 'a' },
+					{ id: 103, web_name: 'Midfielder', element_type: 3, team: 2, now_cost: 85, form: '12', points_per_game: '9', minutes: 1500, status: 'a' },
+					{ id: 104, web_name: 'Forward', element_type: 4, team: 2, now_cost: 90, form: '10', points_per_game: '8', minutes: 1200, status: 'a' },
+					...Array.from({ length: 11 }, (_, i) => ({ id: 105 + i, web_name: `Player${i}`, element_type: i < 3 ? 2 : i < 7 ? 3 : 4, team: 1, now_cost: 50, form: '2', points_per_game: '2', minutes: 800, status: 'a' })),
 				],
 			});
 		}
@@ -165,6 +165,27 @@ test('fixtures command shows the next round and difficult runs', async () => {
 	assert.match(telegramReplies.at(-1).text, /Toughest next 2-GW run/);
 });
 
+test('/recommend lists available players by position with prices and fixtures', async () => {
+	await postUpdate(-1001, '/recommend');
+	const text = telegramReplies.at(-1).text;
+	assert.match(text, /GW5 suggested picks/);
+	assert.match(text, /GK:/);
+	assert.match(text, /DEF:/);
+	assert.match(text, /MID:/);
+	assert.match(text, /FWD:/);
+	assert.match(text, /Midfielder \(BET, £8\.5m, form 12; A ALP \(FDR 2\)\)/);
+	assert.match(text, /not a guarantee of points/);
+});
+
+test('/captain returns a top three shortlist with a form caveat', async () => {
+	await postUpdate(-1001, '/captain');
+	const text = telegramReplies.at(-1).text;
+	assert.match(text, /GW5 captain shortlist/);
+	assert.match(text, /Suggested captain: Midfielder/);
+	assert.match(text, /Vice-captain option: Forward/);
+	assert.match(text, /not predictions or guarantees/);
+});
+
 test('team command displays a manager’s starting picks, captain, and bench', async () => {
 	await postUpdate(-1001, '/team Alpha');
 	assert.match(telegramReplies.at(-1).text, /Alpha’s GW4 team/);
@@ -204,6 +225,8 @@ test('/help lists the expanded command set', async () => {
 	assert.match(telegramReplies.at(-1).text, /\/fixtures/);
 	assert.match(telegramReplies.at(-1).text, /\/team - tap a manager/);
 	assert.match(telegramReplies.at(-1).text, /\/rival - tap two managers/);
+	assert.match(telegramReplies.at(-1).text, /\/recommend/);
+	assert.match(telegramReplies.at(-1).text, /\/captain/);
 });
 
 test('unconfigured group cannot receive either league score', async () => {

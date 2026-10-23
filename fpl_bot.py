@@ -225,6 +225,93 @@ def build_fixtures_text():
     return '\n'.join(lines)
 
 
+def get_next_gameweek(bootstrap):
+    events = bootstrap.get('events', [])
+    latest_finished = max((event['id'] for event in events if event.get('finished')), default=0)
+    return (
+        next((event for event in events if event.get('is_next')), None)
+        or next((event for event in events if event.get('is_current') and not event.get('finished')), None)
+        or next((event for event in events if event['id'] > latest_finished), None)
+    )
+
+
+def rank_player_picks(bootstrap, fixtures, gameweek, positions):
+    teams = {team['id']: team for team in bootstrap.get('teams', [])}
+    fixture_by_team = {}
+    for fixture in fixtures:
+        if fixture.get('event') != gameweek:
+            continue
+        home = teams.get(fixture['team_h'])
+        away = teams.get(fixture['team_a'])
+        if home:
+            fixture_by_team[fixture['team_h']] = {
+                'opponent': away.get('short_name', 'TBC'),
+                'venue': 'H',
+                'difficulty': fixture.get('team_h_difficulty', 3),
+            }
+        if away:
+            fixture_by_team[fixture['team_a']] = {
+                'opponent': home.get('short_name', 'TBC'),
+                'venue': 'A',
+                'difficulty': fixture.get('team_a_difficulty', 3),
+            }
+
+    ranked = []
+    for player in bootstrap.get('elements', []):
+        if player.get('element_type') not in positions or not player.get('now_cost', 0):
+            continue
+        if player.get('status') not in (None, 'a') or player.get('chance_of_playing_next_round') == 0:
+            continue
+        fixture = fixture_by_team.get(player.get('team'))
+        form = float(player.get('form') or 0)
+        points_per_game = float(player.get('points_per_game') or 0)
+        minutes = float(player.get('minutes') or 0)
+        difficulty = fixture['difficulty'] if fixture else 3
+        score = form * 0.45 + points_per_game * 0.35 + (5 - difficulty) * 0.45 + min(minutes / 1800, 1) * 0.75
+        ranked.append({
+            'name': player.get('web_name', f"Player {player.get('id', '?')}"),
+            'position': player['element_type'],
+            'team': teams.get(player.get('team'), {}).get('short_name', 'TBC'),
+            'price': player['now_cost'] / 10,
+            'form': form,
+            'fixture': f"{fixture['venue']} {fixture['opponent']} (FDR {fixture['difficulty']})" if fixture else 'fixture TBD',
+            'score': score,
+        })
+    return sorted(ranked, key=lambda player: player['score'], reverse=True)
+
+
+def build_recommendations_text(captain_only=False):
+    bootstrap = get('bootstrap-static/')
+    fixtures = get('fixtures/')
+    next_event = get_next_gameweek(bootstrap)
+    if not next_event:
+        return 'No upcoming gameweek is currently available for recommendations.'
+    position_names = {1: 'GK', 2: 'DEF', 3: 'MID', 4: 'FWD'}
+    positions = (3, 4) if captain_only else (1, 2, 3, 4)
+    ranked = rank_player_picks(bootstrap, fixtures, next_event['id'], positions)
+    if not ranked:
+        return 'No available player recommendations were found for the next gameweek.'
+    if captain_only:
+        lines = [f"© GW{next_event['id']} captain shortlist (form, minutes & fixture-based):"]
+        for index, player in enumerate(ranked[:3]):
+            label = '⭐ Suggested captain' if index == 0 else 'Vice-captain option' if index == 1 else 'Alternative'
+            lines.append(f"{label}: {player['name']} ({player['team']}, {player['fixture']}; form {player['form']:g})")
+        lines.extend(['', 'These are stats-based suggestions, not predictions or guarantees.'])
+        return '\n'.join(lines)
+
+    lines = [f"💡 GW{next_event['id']} suggested picks (stats-based):"]
+    for position, label in position_names.items():
+        candidates = [player for player in ranked if player['position'] == position][:2]
+        if candidates:
+            lines.extend(['', f'{label}:'])
+            lines.extend(
+                f"• {player['name']} ({player['team']}, £{player['price']:.1f}m, form {player['form']:g}; {player['fixture']})"
+                for player in candidates
+            )
+    lines.extend(['', 'Uses recent form, points per game, minutes, availability and fixture difficulty; not a guarantee of points.'])
+    return '\n'.join(lines)
+
+
 def build_team_text(league_id, query, selected_entry_id=None):
     standings = get(f'leagues-classic/{league_id}/standings/')
     members = standings.get('standings', {}).get('results', [])
@@ -366,6 +453,10 @@ def build_command_text(command, args, league_id, mode):
         return build_banter_text(data, gw)
     if command == '/fixtures':
         return build_fixtures_text()
+    if command == '/recommend':
+        return build_recommendations_text()
+    if command == '/captain':
+        return build_recommendations_text(captain_only=True)
     if command == '/team':
         return build_team_text(league_id, ' '.join(args))
     return None
@@ -385,12 +476,13 @@ def handle_command(text, chat_id):
             'FPL commands:\n/score - league score and prizes\n/table - overall standings\n'
             '/form - points over the last 5 gameweeks\n/gw - latest gameweek standings\n'
             '/rival - tap two managers to compare (or type names)\n/banter - weekly bragging rights\n'
-            '/fixtures - next fixtures and toughest runs\n/team - tap a manager to view picks (or type a name)'
+            '/fixtures - next fixtures and toughest runs\n/recommend - stats-based picks by position\n'
+            '/captain - captain shortlist\n/team - tap a manager to view picks (or type a name)'
         )
         send_message(chat_id, help_text)
         return
 
-    commands = {'/score', '/table', '/form', '/gw', '/rival', '/banter', '/fixtures', '/team'}
+    commands = {'/score', '/table', '/form', '/gw', '/rival', '/banter', '/fixtures', '/recommend', '/captain', '/team'}
     if command not in commands:
         return
 
