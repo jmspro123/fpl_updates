@@ -13,6 +13,7 @@ const env = {
 	TG_CHAT_ID: '-1001',
 	FPL_LEAGUE_ID_2: 'second-league',
 	TG_CHAT_ID_2: '-1002',
+	FPL_PRIVATE_ENTRY_ID: '987654',
 	TELEGRAM_WEBHOOK_SECRET: 'test_webhook_secret',
 	SETUP_SECRET: 'test_setup_secret',
 };
@@ -38,6 +39,8 @@ beforeEach(() => {
 					{ id: 103, web_name: 'Midfielder', element_type: 3, team: 2, now_cost: 85, form: '12', points_per_game: '9', minutes: 1500, status: 'a' },
 					{ id: 104, web_name: 'Forward', element_type: 4, team: 2, now_cost: 90, form: '10', points_per_game: '8', minutes: 1200, status: 'a' },
 					...Array.from({ length: 11 }, (_, i) => ({ id: 105 + i, web_name: `Player${i}`, element_type: i < 3 ? 2 : i < 7 ? 3 : 4, team: 1, now_cost: 50, form: '2', points_per_game: '2', minutes: 800, status: 'a' })),
+					{ id: 116, web_name: 'Budget Midfielder', element_type: 3, team: 2, now_cost: 70, form: '6', points_per_game: '5', minutes: 1000, status: 'a' },
+					{ id: 117, web_name: 'Premium Midfielder', element_type: 3, team: 2, now_cost: 75, form: '3', points_per_game: '3', minutes: 100, status: 'a' },
 				],
 			});
 		}
@@ -51,17 +54,20 @@ beforeEach(() => {
 		if (url.includes('/event/4/picks/')) {
 			fplCalls.push(url);
 			return Response.json({ picks: [
-				{ element: 101, position: 1 },
-				{ element: 102, position: 2, is_captain: true },
-				{ element: 103, position: 3, is_vice_captain: true },
-				{ element: 104, position: 4 },
-				...Array.from({ length: 7 }, (_, i) => ({ element: 105 + i, position: 5 + i })),
-				{ element: 113, position: 12 },
-			] });
+				{ element: 101, position: 1, selling_price: 45 },
+				{ element: 102, position: 2, selling_price: 55, is_captain: true },
+				{ element: 103, position: 3, selling_price: 85, is_vice_captain: true },
+				{ element: 104, position: 4, selling_price: 90 },
+				...Array.from({ length: 7 }, (_, i) => ({ element: 105 + i, position: 5 + i, selling_price: 50 })),
+				{ element: 113, position: 12, selling_price: 50 },
+			], entry_history: { bank: 20, value: 1000 } });
 		}
 		if (url.includes('/transfers/')) {
 			fplCalls.push(url);
 			const entry = Number(url.match(/entry\/(\d+)/)[1]);
+			if (entry === 987654) {
+				return Response.json([{ event: 5, element_in: 103, element_out: 102, time: '2026-10-24T12:00:00Z' }]);
+			}
 			return Response.json(entry === 11
 				? [{ event: 5, element_in: 103, element_out: 102, time: '2026-10-24T10:00:00Z' }]
 				: [{ event: 5, element_in: 104, element_out: 101, time: '2026-10-24T11:00:00Z' }]);
@@ -78,7 +84,9 @@ beforeEach(() => {
 						event_transfers_cost: cost,
 					};
 				}),
-				chips: entry === 11
+				chips: entry === 987654
+					? [{ name: '3xc', event: 4 }]
+					: entry === 11
 					? [{ name: 'freehit', event: 3 }]
 					: [{ name: 'wildcard', event: 2 }],
 			});
@@ -88,6 +96,7 @@ beforeEach(() => {
 			return Response.json({ standings: { results: [
 				{ entry: 11, player_name: 'Alpha' },
 				{ entry: 22, player_name: 'Beta' },
+				{ entry: 987654, player_name: 'Private Manager' },
 			] } });
 		}
 		if (url.includes('/entry/')) {
@@ -189,16 +198,27 @@ test('fixtures command shows the next round and difficult runs', async () => {
 	assert.match(telegramReplies.at(-1).text, /Toughest next 2-GW run/);
 });
 
-test('/recommend lists available players by position with prices and fixtures', async () => {
-	await postUpdate(-1001, '/recommend');
+test('/recommend uses squad ownership, swap budget and the playful Rashford pick', async () => {
+	await postUpdate(-1001, '/recommend Alpha');
 	const text = telegramReplies.at(-1).text;
-	assert.match(text, /GW5 suggested picks/);
-	assert.match(text, /GK:/);
-	assert.match(text, /DEF:/);
-	assert.match(text, /MID:/);
-	assert.match(text, /FWD:/);
-	assert.match(text, /Midfielder \(BET, £8\.5m, form 12; A ALP \(FDR 2\)\)/);
-	assert.match(text, /not a guarantee of points/);
+	assert.match(text, /GW5 transfer ideas for Alpha/);
+	assert.match(text, /MID \(swap out Player3; up to £7\.0m\):/);
+	assert.match(text, /Budget Midfielder \(BET, £7\.0m/);
+	assert.doesNotMatch(text, /Premium Midfielder/);
+	assert.doesNotMatch(text, /• Midfielder \(/);
+	assert.match(text, /Marcus Rashford — form 10\/10/);
+	assert.match(text, /not a stats- or budget-checked pick/);
+});
+
+test('/recommend without a manager offers personalized recommendation choices', async () => {
+	await postUpdate(-1001, '/recommend');
+	const menu = telegramReplies.at(-1);
+	assert.match(menu.text, /Choose a manager for personalized recommendations/);
+	assert.equal(menu.reply_markup.inline_keyboard[0][0].callback_data, 'recommend:11');
+	assert.doesNotMatch(JSON.stringify(menu.reply_markup), /Private Manager|987654/);
+
+	await postCallback(-1001, 'recommend:11');
+	assert.match(telegramReplies.at(-1).text, /transfer ideas for Alpha/);
 });
 
 test('/captain returns a top three shortlist with a form caveat', async () => {
@@ -207,6 +227,7 @@ test('/captain returns a top three shortlist with a form caveat', async () => {
 	assert.match(text, /GW5 captain shortlist/);
 	assert.match(text, /Suggested captain: Midfielder/);
 	assert.match(text, /Vice-captain option: Forward/);
+	assert.match(text, /Marcus Rashford — form 10\/10/);
 	assert.match(text, /not predictions or guarantees/);
 });
 
@@ -220,6 +241,14 @@ test('/moves shows the latest league transfers first with player names', async (
 	assert.match(text, /GW2 · Beta: used Wildcard/);
 	assert.match(text, /GW4 · Alpha: took a -4 point hit/);
 	assert.match(text, /GW3 · Beta: took a -8 point hit/);
+	assert.doesNotMatch(text, /Private Manager|Triple Captain/);
+	assert.equal(fplCalls.some((url) => url.includes('entry/987654/transfers/')), false);
+});
+
+test('/transfers is an alias for the public league moves feed', async () => {
+	await postUpdate(-1001, '/transfers');
+	assert.match(telegramReplies.at(-1).text, /Latest league transfers \(2 shown\)/);
+	assert.doesNotMatch(telegramReplies.at(-1).text, /Private Manager/);
 });
 
 test('team command displays a manager’s starting picks, captain, and bench', async () => {
@@ -228,6 +257,7 @@ test('team command displays a manager’s starting picks, captain, and bench', a
 	assert.match(telegramReplies.at(-1).text, /Captain \(C\)/);
 	assert.match(telegramReplies.at(-1).text, /Midfielder \(VC\)/);
 	assert.match(telegramReplies.at(-1).text, /Bench: Player8/);
+	assert.match(telegramReplies.at(-1).text, /Bank: £2\.0m · Squad value: £100\.0m/);
 });
 
 test('/team without a name offers tappable manager choices', async () => {
@@ -235,11 +265,26 @@ test('/team without a name offers tappable manager choices', async () => {
 	const menu = telegramReplies.at(-1);
 	assert.match(menu.text, /Choose a manager/);
 	assert.deepEqual(menu.reply_markup.inline_keyboard[0].map((button) => button.text), ['Alpha', 'Beta']);
+	assert.doesNotMatch(JSON.stringify(menu.reply_markup), /Private Manager|987654/);
 	assert.equal(menu.reply_markup.inline_keyboard[0][0].callback_data, 'team:11');
 
 	await postCallback(-1001, 'team:11');
 	assert.match(telegramReplies.at(-1).text, /Alpha’s GW4 team/);
 	assert.equal(telegramCalls.some((call) => call.url.endsWith('/answerCallbackQuery')), true);
+});
+
+test('/team and /recommend keep the private manager confidential', async () => {
+	await postUpdate(-1001, '/team Private Manager');
+	assert.equal(telegramReplies.at(-1).text, 'This manager’s team is private.');
+	assert.equal(fplCalls.some((url) => url.includes('entry/987654/event/')), false);
+
+	await postCallback(-1001, 'team:987654');
+	assert.equal(telegramReplies.at(-1).text, 'This manager’s team is private.');
+	assert.equal(fplCalls.some((url) => url.includes('entry/987654/event/')), false);
+
+	await postUpdate(-1001, '/recommend Private Manager');
+	assert.equal(telegramReplies.at(-1).text, 'Personalized recommendations are not available for this manager.');
+	assert.equal(fplCalls.some((url) => url.includes('entry/987654/event/')), false);
 });
 
 test('/rival without names lets the user select both managers', async () => {
@@ -249,7 +294,10 @@ test('/rival without names lets the user select both managers', async () => {
 	await postCallback(-1001, 'rival:11');
 	const secondMenu = telegramReplies.at(-1);
 	assert.match(secondMenu.text, /Choose the second manager/);
-	assert.deepEqual(secondMenu.reply_markup.inline_keyboard.flat().map((button) => button.callback_data), ['rival2:11:22']);
+	assert.deepEqual(
+		secondMenu.reply_markup.inline_keyboard.flat().map((button) => button.callback_data),
+		['rival2:11:22', 'rival2:11:987654'],
+	);
 
 	await postCallback(-1001, 'rival2:11:22');
 	assert.match(telegramReplies.at(-1).text, /Alpha vs Beta — GW4/);
@@ -264,6 +312,7 @@ test('/help lists the expanded command set', async () => {
 	assert.match(telegramReplies.at(-1).text, /\/recommend/);
 	assert.match(telegramReplies.at(-1).text, /\/captain/);
 	assert.match(telegramReplies.at(-1).text, /\/moves/);
+	assert.match(telegramReplies.at(-1).text, /\/transfers/);
 });
 
 test('unconfigured group cannot receive either league score', async () => {

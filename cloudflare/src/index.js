@@ -2,6 +2,10 @@ const FPL_API = 'https://fantasy.premierleague.com/api';
 const TELEGRAM_API = 'https://api.telegram.org';
 const FPL_HEADERS = { 'User-Agent': 'Mozilla/5.0' };
 
+function isPrivateEntry(entryId, privateEntryId) {
+	return Boolean(privateEntryId) && String(entryId) === String(privateEntryId);
+}
+
 async function telegramCall(env, method, body) {
 	const response = await fetch(`${TELEGRAM_API}/bot${env.TG_TOKEN}/${method}`, {
 		method: 'POST',
@@ -309,9 +313,11 @@ function rankPlayerPicks(bootstrap, fixtures, gameweek, positions) {
 			const difficulty = fixture?.difficulty ?? 3;
 			const score = form * 0.45 + pointsPerGame * 0.35 + (5 - difficulty) * 0.45 + Math.min(minutes / 1800, 1) * 0.75;
 			return {
+				id: player.id,
 				name: player.web_name,
 				position: player.element_type,
 				team: teams.get(player.team)?.short_name || 'TBC',
+				teamId: player.team,
 				price: player.now_cost / 10,
 				form,
 				pointsPerGame,
@@ -336,7 +342,11 @@ async function recommendationsText(captainOnly = false) {
 			const label = index === 0 ? '⭐ Suggested captain' : index === 1 ? 'Vice-captain option' : 'Alternative';
 			lines.push(`${label}: ${player.name} (${player.team}, ${player.fixture}; form ${player.form})`);
 		});
-		lines.push('', 'These are stats-based suggestions, not predictions or guarantees.');
+		lines.push(
+			'',
+			'🎭 Troll pick: Marcus Rashford — form 10/10. Just for the banter; this is not a stats-based pick.',
+			'These are stats-based suggestions, not predictions or guarantees.',
+		);
 		return lines.join('\n');
 	}
 	const lines = [`💡 GW${nextEvent.id} suggested picks (stats-based):`];
@@ -350,6 +360,79 @@ async function recommendationsText(captainOnly = false) {
 	return lines.join('\n');
 }
 
+async function personalizedRecommendationsText(leagueId, query, selectedEntryId, privateEntryId) {
+	const standings = await fplGet(`leagues-classic/${leagueId}/standings/`);
+	const members = standings?.standings?.results || [];
+	let member;
+	if (selectedEntryId !== undefined) {
+		member = members.find((item) => String(item.entry) === String(selectedEntryId));
+		if (!member) return 'That manager is no longer in this league. Please run /recommend again.';
+	} else {
+		const result = findManager(members.map((item) => [item.player_name, item.entry]), query);
+		if (result.error) return result.error;
+		const [, entryId] = result.manager;
+		member = members.find((item) => String(item.entry) === String(entryId));
+	}
+	if (isPrivateEntry(member.entry, privateEntryId)) return 'Personalized recommendations are not available for this manager.';
+
+	const [bootstrap, fixtures, history] = await Promise.all([
+		fplGet('bootstrap-static/'),
+		fplGet('fixtures/'),
+		fplGet(`entry/${member.entry}/history/`),
+	]);
+	const currentGameweek = (bootstrap.events || []).find((event) => event.is_current)?.id
+		|| Math.max(0, ...(history.current || []).map((event) => event.event));
+	if (!currentGameweek) return 'No current gameweek is available for this manager.';
+	const picksData = await fplGet(`entry/${member.entry}/event/${currentGameweek}/picks/`);
+	const picks = picksData.picks || [];
+	if (!picks.length) return `No picks are available for ${member.player_name} in GW${currentGameweek} yet.`;
+	const bank = picksData.entry_history?.bank;
+	if (!Number.isFinite(bank)) return 'The FPL API did not provide this manager’s available bank.';
+
+	const nextEvent = getNextGameweek(bootstrap);
+	if (!nextEvent) return 'No upcoming gameweek is currently available for recommendations.';
+	const ranked = rankPlayerPicks(bootstrap, fixtures, nextEvent.id, [1, 2, 3, 4]);
+	const rankedById = new Map(ranked.map((player) => [player.id, player]));
+	const ownedIds = new Set(picks.map((pick) => pick.element));
+	const elementsById = new Map((bootstrap.elements || []).map((player) => [player.id, player]));
+	const clubCounts = new Map();
+	for (const pick of picks) {
+		const player = elementsById.get(pick.element);
+		if (player) clubCounts.set(player.team, (clubCounts.get(player.team) || 0) + 1);
+	}
+
+	const positionNames = new Map([[1, 'GK'], [2, 'DEF'], [3, 'MID'], [4, 'FWD']]);
+	const lines = [`💡 GW${nextEvent.id} transfer ideas for ${member.player_name} (based on their current squad):`];
+	for (const [position, label] of positionNames) {
+		const owned = picks.map((pick) => ({
+			pick,
+			player: rankedById.get(pick.element),
+		})).filter(({ pick, player }) => player?.position === position && Number.isFinite(pick.selling_price))
+			.sort((left, right) => left.player.score - right.player.score);
+		const outgoing = owned[0];
+		if (!outgoing) continue;
+		const budget = bank + outgoing.pick.selling_price;
+		const candidates = ranked.filter((player) => player.position === position
+			&& !ownedIds.has(player.id)
+			&& player.price * 10 <= budget
+			&& ((clubCounts.get(player.teamId) || 0) - (player.teamId === outgoing.player.teamId ? 1 : 0)) < 3)
+			.slice(0, 2);
+		if (!candidates.length) continue;
+		lines.push(
+			'',
+			`${label} (swap out ${outgoing.player.name}; up to £${(budget / 10).toFixed(1)}m):`,
+			...candidates.map((player) => `• ${player.name} (${player.team}, £${player.price.toFixed(1)}m, form ${player.form}; ${player.fixture})`),
+		);
+	}
+	if (lines.length === 1) lines.push('', 'No unowned same-position options fit the available budget for a swap this gameweek.');
+	lines.push(
+		'',
+		'🎭 Troll pick: Marcus Rashford — form 10/10. Just for the banter; this is not a stats- or budget-checked pick.',
+		'Transfer ideas exclude players already in this squad and use the bank plus the outgoing player’s selling price.',
+	);
+	return lines.join('\n');
+}
+
 function formatTransferTime(value) {
 	const date = new Date(value);
 	if (Number.isNaN(date.getTime())) return 'time unavailable';
@@ -358,7 +441,7 @@ function formatTransferTime(value) {
 	}).format(date).replace(',', '')} UTC`;
 }
 
-async function movesText(leagueId) {
+async function movesText(leagueId, privateEntryId) {
 	const [standings, bootstrap] = await Promise.all([
 		fplGet(`leagues-classic/${leagueId}/standings/`),
 		fplGet('bootstrap-static/'),
@@ -366,7 +449,8 @@ async function movesText(leagueId) {
 	const members = standings?.standings?.results || [];
 	if (members.length === 0) return 'No managers were found in this league.';
 	const playerNames = new Map((bootstrap.elements || []).map((player) => [player.id, player.web_name]));
-	const managerActivity = await Promise.all(members.map(async (member) => {
+	const visibleMembers = members.filter((member) => !isPrivateEntry(member.entry, privateEntryId));
+	const managerActivity = await Promise.all(visibleMembers.map(async (member) => {
 		const [transfers, history] = await Promise.all([
 			fplGet(`entry/${member.entry}/transfers/`),
 			fplGet(`entry/${member.entry}/history/`),
@@ -410,7 +494,7 @@ async function movesText(leagueId) {
 	return lines.join('\n');
 }
 
-async function teamText(leagueId, query, selectedEntryId) {
+async function teamText(leagueId, query, selectedEntryId, privateEntryId) {
 	const standings = await fplGet(`leagues-classic/${leagueId}/standings/`);
 	const members = standings?.standings?.results || [];
 	let member;
@@ -423,6 +507,7 @@ async function teamText(leagueId, query, selectedEntryId) {
 		const [, entryId] = result.manager;
 		member = members.find((item) => String(item.entry) === String(entryId));
 	}
+	if (isPrivateEntry(member.entry, privateEntryId)) return 'This manager’s team is private.';
 	const { player_name: name, entry: entryId } = member;
 	const [bootstrap, history] = await Promise.all([
 		fplGet('bootstrap-static/'),
@@ -432,6 +517,10 @@ async function teamText(leagueId, query, selectedEntryId) {
 		|| Math.max(0, ...(history.current || []).map((event) => event.event));
 	if (!gw) return 'No gameweek is currently available for that manager.';
 	const picksData = await fplGet(`entry/${entryId}/event/${gw}/picks/`);
+	const entryHistory = picksData.entry_history || {};
+	if (!Number.isFinite(entryHistory.bank) || !Number.isFinite(entryHistory.value)) {
+		return 'The FPL API did not provide this manager’s bank and squad value.';
+	}
 	const elements = bootstrap.elements || [];
 	const players = new Map(elements.map((player) => [player.id, player.web_name]));
 	const positions = new Map(elements.map((player) => [player.id, player.element_type]));
@@ -439,7 +528,10 @@ async function teamText(leagueId, query, selectedEntryId) {
 	if (!picks.length) return `No picks are available for ${name} in GW${gw} yet.`;
 	const starters = picks.filter((pick) => pick.position <= 11);
 	const formation = [2, 3, 4].map((type) => starters.filter((pick) => positions.get(pick.element) === type).length).join('-');
-	const lines = [`🧢 ${name}’s GW${gw} team${formation ? ` (${formation})` : ''}:`];
+	const lines = [
+		`🧢 ${name}’s GW${gw} team${formation ? ` (${formation})` : ''}:`,
+		`Bank: £${(entryHistory.bank / 10).toFixed(1)}m · Squad value: £${(entryHistory.value / 10).toFixed(1)}m`,
+	];
 	for (const pick of starters) {
 		const player = players.get(pick.element) || `Player ${pick.element}`;
 		lines.push(`${pick.is_captain ? '⭐ ' : ''}${player}${pick.is_captain ? ' (C)' : pick.is_vice_captain ? ' (VC)' : ''}`);
@@ -470,19 +562,27 @@ function managerKeyboard(members, action, firstEntryId) {
 async function sendManagerChoices(env, chatId, leagueId, action, firstEntryId) {
 	const standings = await fplGet(`leagues-classic/${leagueId}/standings/`);
 	const members = standings?.standings?.results || [];
+	const availableMembers = ['team', 'recommend'].includes(action)
+		? members.filter((member) => !isPrivateEntry(member.entry, env.FPL_PRIVATE_ENTRY_ID))
+		: members;
 	const candidates = firstEntryId === undefined
-		? members
-		: members.filter((member) => String(member.entry) !== String(firstEntryId));
+		? availableMembers
+		: availableMembers.filter((member) => String(member.entry) !== String(firstEntryId));
 	if (candidates.length === 0) {
-		await telegramCall(env, 'sendMessage', { chat_id: chatId, text: 'No other managers are available to compare.' });
+		const text = action === 'recommend' ? 'No managers are available for recommendations.'
+			: action === 'team' ? 'No managers were found in this league.'
+				: 'No other managers are available to compare.';
+		await telegramCall(env, 'sendMessage', { chat_id: chatId, text });
 		return;
 	}
 	await telegramCall(env, 'sendMessage', {
 		chat_id: chatId,
 		text: firstEntryId === undefined
-			? action === 'team' ? 'Choose a manager to view their team:' : 'Choose the first manager to compare:'
+			? action === 'team' ? 'Choose a manager to view their team:'
+				: action === 'recommend' ? 'Choose a manager for personalized recommendations:'
+					: 'Choose the first manager to compare:'
 			: 'Choose the second manager to compare:',
-		reply_markup: managerKeyboard(members, action, firstEntryId),
+		reply_markup: managerKeyboard(availableMembers, action, firstEntryId),
 	});
 }
 
@@ -508,7 +608,10 @@ async function handleCallbackQuery(callback, env) {
 	const parts = (callback.data || '').split(':');
 	try {
 		if (parts[0] === 'team' && parts.length === 2 && /^\d+$/.test(parts[1])) {
-			const text = await teamText(config.leagueId, '', parts[1]);
+			const text = await teamText(config.leagueId, '', parts[1], env.FPL_PRIVATE_ENTRY_ID);
+			await telegramCall(env, 'sendMessage', { chat_id: String(chatId), text });
+		} else if (parts[0] === 'recommend' && parts.length === 2 && /^\d+$/.test(parts[1])) {
+			const text = await personalizedRecommendationsText(config.leagueId, '', parts[1], env.FPL_PRIVATE_ENTRY_ID);
 			await telegramCall(env, 'sendMessage', { chat_id: String(chatId), text });
 		} else if (parts[0] === 'rival' && parts.length === 2 && /^\d+$/.test(parts[1])) {
 			await sendManagerChoices(env, String(chatId), config.leagueId, 'rival', parts[1]);
@@ -527,7 +630,7 @@ async function handleCallbackQuery(callback, env) {
 	}
 }
 
-async function commandText(command, args, leagueId, mode) {
+async function commandText(command, args, leagueId, mode, privateEntryId) {
 	if (command === '/score') return scoreText(leagueId, mode);
 	if (['/table', '/form', '/gw', '/rival', '/banter'].includes(command)) {
 		const data = await getHistoryRows(leagueId);
@@ -539,11 +642,11 @@ async function commandText(command, args, leagueId, mode) {
 		return buildBanterMessage(data, gw);
 	}
 	if (command === '/fixtures') return fixturesText();
-	if (command === '/moves') return movesText(leagueId);
-	if (command === '/recommend') return recommendationsText();
+	if (command === '/moves' || command === '/transfers') return movesText(leagueId, privateEntryId);
+	if (command === '/recommend') return personalizedRecommendationsText(leagueId, args.join(' '), undefined, privateEntryId);
 	if (command === '/captain') return recommendationsText(true);
 	if (command === '/team' && args.length === 0) return undefined;
-	if (command === '/team') return teamText(leagueId, args.join(' '));
+	if (command === '/team') return teamText(leagueId, args.join(' '), undefined, privateEntryId);
 	if (command === '/rival' && args.length === 0) return undefined;
 	return undefined;
 }
@@ -562,11 +665,11 @@ async function handleTelegramUpdate(update, env) {
 	if (command === '/start' || command === '/help') {
 		await telegramCall(env, 'sendMessage', {
 			chat_id: chatId,
-			text: 'FPL commands:\n/score - league score and prizes\n/table - overall standings\n/form - points over the last 5 gameweeks\n/gw - latest gameweek standings\n/rival - tap two managers to compare (or type names)\n/moves - latest transfers, chips and hits\n/banter - weekly bragging rights\n/fixtures - next fixtures and toughest runs\n/recommend - stats-based picks by position\n/captain - captain shortlist\n/team - tap a manager to view their picks (or type a name)',
+			text: 'FPL commands:\n/score - league score and prizes\n/table - overall standings\n/form - points over the last 5 gameweeks\n/gw - latest gameweek standings\n/rival - tap two managers to compare (or type names)\n/moves or /transfers - latest transfers, chips and hits\n/banter - weekly bragging rights\n/fixtures - next gameweek fixtures and toughest runs\n/recommend - personalized transfer ideas (choose or type a manager)\n/captain - captain shortlist\n/team - tap a manager to view their picks (or type a name)',
 		});
 		return;
 	}
-	if (!['/score', '/table', '/form', '/gw', '/rival', '/moves', '/banter', '/fixtures', '/recommend', '/captain', '/team'].includes(command)) return;
+	if (!['/score', '/table', '/form', '/gw', '/rival', '/moves', '/transfers', '/banter', '/fixtures', '/recommend', '/captain', '/team'].includes(command)) return;
 
 	const config = configuredLeague(chatId, env);
 	if (!config) {
@@ -582,11 +685,15 @@ async function handleTelegramUpdate(update, env) {
 			await sendManagerChoices(env, chatId, config.leagueId, 'team');
 			return;
 		}
+		if (command === '/recommend' && args.length === 0) {
+			await sendManagerChoices(env, chatId, config.leagueId, 'recommend');
+			return;
+		}
 		if (command === '/rival' && args.length === 0) {
 			await sendManagerChoices(env, chatId, config.leagueId, 'rival');
 			return;
 		}
-		const text = await commandText(command, args, config.leagueId, config.mode);
+		const text = await commandText(command, args, config.leagueId, config.mode, env.FPL_PRIVATE_ENTRY_ID);
 		await telegramCall(env, 'sendMessage', { chat_id: chatId, text });
 	} catch (error) {
 		console.error('Failed to build score response:', error);

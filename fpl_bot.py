@@ -24,6 +24,11 @@ MAIN_LEAGUE_ID = os.environ.get('FPL_LEAGUE_ID')
 MAIN_CHAT_ID = os.environ.get('TG_CHAT_ID')
 SECOND_LEAGUE_ID = os.environ.get('FPL_LEAGUE_ID_2')
 SECOND_CHAT_ID = os.environ.get('TG_CHAT_ID_2')
+PRIVATE_ENTRY_ID = os.environ.get('FPL_PRIVATE_ENTRY_ID')
+
+
+def is_private_entry(entry_id):
+    return PRIVATE_ENTRY_ID is not None and str(entry_id) == str(PRIVATE_ENTRY_ID)
 
 
 def get(path):
@@ -270,9 +275,11 @@ def rank_player_picks(bootstrap, fixtures, gameweek, positions):
         difficulty = fixture['difficulty'] if fixture else 3
         score = form * 0.45 + points_per_game * 0.35 + (5 - difficulty) * 0.45 + min(minutes / 1800, 1) * 0.75
         ranked.append({
+            'id': player['id'],
             'name': player.get('web_name', f"Player {player.get('id', '?')}"),
             'position': player['element_type'],
             'team': teams.get(player.get('team'), {}).get('short_name', 'TBC'),
+            'team_id': player.get('team'),
             'price': player['now_cost'] / 10,
             'form': form,
             'fixture': f"{fixture['venue']} {fixture['opponent']} (FDR {fixture['difficulty']})" if fixture else 'fixture TBD',
@@ -297,7 +304,11 @@ def build_recommendations_text(captain_only=False):
         for index, player in enumerate(ranked[:3]):
             label = '⭐ Suggested captain' if index == 0 else 'Vice-captain option' if index == 1 else 'Alternative'
             lines.append(f"{label}: {player['name']} ({player['team']}, {player['fixture']}; form {player['form']:g})")
-        lines.extend(['', 'These are stats-based suggestions, not predictions or guarantees.'])
+        lines.extend([
+            '',
+            '🎭 Troll pick: Marcus Rashford — form 10/10. Just for the banter; this is not a stats-based pick.',
+            'These are stats-based suggestions, not predictions or guarantees.',
+        ])
         return '\n'.join(lines)
 
     lines = [f"💡 GW{next_event['id']} suggested picks (stats-based):"]
@@ -310,6 +321,97 @@ def build_recommendations_text(captain_only=False):
                 for player in candidates
             )
     lines.extend(['', 'Uses recent form, points per game, minutes, availability and fixture difficulty; not a guarantee of points.'])
+    return '\n'.join(lines)
+
+
+def build_personalized_recommendations_text(league_id, query='', selected_entry_id=None):
+    standings = get(f'leagues-classic/{league_id}/standings/')
+    members = standings.get('standings', {}).get('results', [])
+    if selected_entry_id is not None:
+        member = next((item for item in members if str(item['entry']) == str(selected_entry_id)), None)
+        if member is None:
+            return 'That manager is no longer in this league. Please run /recommend again.'
+    else:
+        selected, error = find_manager(
+            [(item['player_name'], item['entry']) for item in members], query,
+        )
+        if error:
+            return error
+        member = next(item for item in members if str(item['entry']) == str(selected[1]))
+    if is_private_entry(member['entry']):
+        return 'Personalized recommendations are not available for this manager.'
+
+    bootstrap = get('bootstrap-static/')
+    history = get(f"entry/{member['entry']}/history/")
+    current_gameweek = next(
+        (event['id'] for event in bootstrap.get('events', []) if event.get('is_current')),
+        max((event['event'] for event in history.get('current', [])), default=0),
+    )
+    if not current_gameweek:
+        return 'No current gameweek is available for this manager.'
+    picks_data = get(f"entry/{member['entry']}/event/{current_gameweek}/picks/")
+    picks = picks_data.get('picks', [])
+    if not picks:
+        return f"No picks are available for {member['player_name']} in GW{current_gameweek} yet."
+    bank = picks_data.get('entry_history', {}).get('bank')
+    if not isinstance(bank, (int, float)):
+        return 'The FPL API did not provide this manager’s available bank.'
+
+    next_event = get_next_gameweek(bootstrap)
+    if not next_event:
+        return 'No upcoming gameweek is currently available for recommendations.'
+    ranked = rank_player_picks(bootstrap, get('fixtures/'), next_event['id'], (1, 2, 3, 4))
+    ranked_by_id = {player['id']: player for player in ranked}
+    owned_ids = {pick['element'] for pick in picks}
+    elements = {player['id']: player for player in bootstrap.get('elements', [])}
+    club_counts = {}
+    for pick in picks:
+        player = elements.get(pick['element'])
+        if player:
+            team_id = player.get('team')
+            club_counts[team_id] = club_counts.get(team_id, 0) + 1
+
+    position_names = {1: 'GK', 2: 'DEF', 3: 'MID', 4: 'FWD'}
+    lines = [f"💡 GW{next_event['id']} transfer ideas for {member['player_name']} (based on their current squad):"]
+    for position, label in position_names.items():
+        owned = [
+            (pick, ranked_by_id[pick['element']])
+            for pick in picks
+            if pick['element'] in ranked_by_id
+            and ranked_by_id[pick['element']]['position'] == position
+            and isinstance(pick.get('selling_price'), (int, float))
+        ]
+        if not owned:
+            continue
+        outgoing_pick, outgoing = min(owned, key=lambda item: item[1]['score'])
+        budget = bank + outgoing_pick['selling_price']
+        candidates = [
+            player for player in ranked
+            if player['position'] == position
+            and player['id'] not in owned_ids
+            and player['price'] * 10 <= budget
+            and (
+                club_counts.get(player['team_id'], 0)
+                - (1 if player['team_id'] == outgoing['team_id'] else 0)
+            ) < 3
+        ][:2]
+        if not candidates:
+            continue
+        lines.extend([
+            '',
+            f"{label} (swap out {outgoing['name']}; up to £{budget / 10:.1f}m):",
+            *(
+                f"• {player['name']} ({player['team']}, £{player['price']:.1f}m, form {player['form']:g}; {player['fixture']})"
+                for player in candidates
+            ),
+        ])
+    if len(lines) == 1:
+        lines.extend(['', 'No unowned same-position options fit the available budget for a swap this gameweek.'])
+    lines.extend([
+        '',
+        '🎭 Troll pick: Marcus Rashford — form 10/10. Just for the banter; this is not a stats- or budget-checked pick.',
+        'Transfer ideas exclude players already in this squad and use the bank plus the outgoing player’s selling price.',
+    ])
     return '\n'.join(lines)
 
 
@@ -332,6 +434,8 @@ def build_moves_text(league_id):
     special_moves = []
     for member in members:
         entry_id = member['entry']
+        if is_private_entry(entry_id):
+            continue
         manager = member['player_name']
         history = get(f'entry/{entry_id}/history/')
         transfer_history = get(f'entry/{entry_id}/transfers/')
@@ -396,6 +500,8 @@ def build_team_text(league_id, query, selected_entry_id=None):
         if error:
             return error
         member = next(item for item in members if str(item['entry']) == str(selected[1]))
+    if is_private_entry(member['entry']):
+        return 'This manager’s team is private.'
     name, entry_id = member['player_name'], member['entry']
     bootstrap = get('bootstrap-static/')
     history = get(f'entry/{entry_id}/history/')
@@ -404,6 +510,9 @@ def build_team_text(league_id, query, selected_entry_id=None):
     if not gw:
         return 'No gameweek is currently available for that manager.'
     picks_data = get(f'entry/{entry_id}/event/{gw}/picks/')
+    entry_history = picks_data.get('entry_history', {})
+    if not isinstance(entry_history.get('bank'), (int, float)) or not isinstance(entry_history.get('value'), (int, float)):
+        return 'The FPL API did not provide this manager’s bank and squad value.'
     elements = bootstrap.get('elements', [])
     players = {player['id']: player['web_name'] for player in elements}
     positions = {player['id']: player['element_type'] for player in elements}
@@ -413,7 +522,10 @@ def build_team_text(league_id, query, selected_entry_id=None):
     starters = [pick for pick in picks if pick['position'] <= 11]
     formation = '-'.join(str(sum(positions.get(pick['element']) == element_type for pick in starters))
                          for element_type in (2, 3, 4))
-    lines = [f'🧢 {name}’s GW{gw} team ({formation}):']
+    lines = [
+        f'🧢 {name}’s GW{gw} team ({formation}):',
+        f"Bank: £{entry_history['bank'] / 10:.1f}m · Squad value: £{entry_history['value'] / 10:.1f}m",
+    ]
     for pick in starters:
         player = players.get(pick['element'], f"Player {pick['element']}")
         label = ' (C)' if pick.get('is_captain') else ' (VC)' if pick.get('is_vice_captain') else ''
@@ -425,7 +537,11 @@ def build_team_text(league_id, query, selected_entry_id=None):
 
 
 def manager_keyboard(members, action, first_entry_id=None):
-    candidates = [member for member in members if first_entry_id is None or str(member['entry']) != str(first_entry_id)]
+    candidates = [
+        member for member in members
+        if (action not in {'team', 'recommend'} or not is_private_entry(member['entry']))
+        and (first_entry_id is None or str(member['entry']) != str(first_entry_id))
+    ]
     prefix = action if first_entry_id is None else f'{action}2:{first_entry_id}'
     buttons = []
     for member in candidates:
@@ -444,15 +560,30 @@ def manager_keyboard(members, action, first_entry_id=None):
 def send_manager_choices(chat_id, league_id, action, first_entry_id=None):
     standings = get(f'leagues-classic/{league_id}/standings/')
     members = standings.get('standings', {}).get('results', [])
-    candidates = [member for member in members if first_entry_id is None or str(member['entry']) != str(first_entry_id)]
+    candidates = [
+        member for member in members
+        if (action not in {'team', 'recommend'} or not is_private_entry(member['entry']))
+        and (first_entry_id is None or str(member['entry']) != str(first_entry_id))
+    ]
     if not candidates:
-        send_message(chat_id, 'No other managers are available to compare.')
+        if action == 'recommend':
+            message = 'No managers are available for recommendations.'
+        elif action == 'team':
+            message = 'No managers were found in this league.'
+        else:
+            message = 'No other managers are available to compare.'
+        send_message(chat_id, message)
         return
     if first_entry_id is None:
-        prompt = 'Choose a manager to view their team:' if action == 'team' else 'Choose the first manager to compare:'
+        if action == 'team':
+            prompt = 'Choose a manager to view their team:'
+        elif action == 'recommend':
+            prompt = 'Choose a manager for personalized recommendations:'
+        else:
+            prompt = 'Choose the first manager to compare:'
     else:
         prompt = 'Choose the second manager to compare:'
-    send_message(chat_id, prompt, manager_keyboard(members, action, first_entry_id))
+    send_message(chat_id, prompt, manager_keyboard(candidates, action, first_entry_id))
 
 
 def build_selected_rival_text(league_id, first_entry_id, second_entry_id):
@@ -500,6 +631,8 @@ def handle_callback(callback):
     parts = callback.get('data', '').split(':')
     if parts[0] == 'team' and len(parts) == 2 and parts[1].isdigit():
         send_message(chat_id, build_team_text(league_id, '', parts[1]))
+    elif parts[0] == 'recommend' and len(parts) == 2 and parts[1].isdigit():
+        send_message(chat_id, build_personalized_recommendations_text(league_id, selected_entry_id=parts[1]))
     elif parts[0] == 'rival' and len(parts) == 2 and parts[1].isdigit():
         send_manager_choices(chat_id, league_id, 'rival', parts[1])
     elif parts[0] == 'rival2' and len(parts) == 3 and all(part.isdigit() for part in parts[1:]):
@@ -523,10 +656,10 @@ def build_command_text(command, args, league_id, mode):
         return build_banter_text(data, gw)
     if command == '/fixtures':
         return build_fixtures_text()
-    if command == '/moves':
+    if command in {'/moves', '/transfers'}:
         return build_moves_text(league_id)
     if command == '/recommend':
-        return build_recommendations_text()
+        return build_personalized_recommendations_text(league_id, ' '.join(args))
     if command == '/captain':
         return build_recommendations_text(captain_only=True)
     if command == '/team':
@@ -548,14 +681,14 @@ def handle_command(text, chat_id):
             'FPL commands:\n/score - league score and prizes\n/table - overall standings\n'
             '/form - points over the last 5 gameweeks\n/gw - latest gameweek standings\n'
             '/rival - tap two managers to compare (or type names)\n/banter - weekly bragging rights\n'
-            '/moves - latest transfers, chips and hits\n'
-            '/fixtures - next fixtures and toughest runs\n/recommend - stats-based picks by position\n'
+            '/moves or /transfers - latest transfers, chips and hits\n'
+            '/fixtures - next fixtures and toughest runs\n/recommend - personalized transfer ideas (choose or type a manager)\n'
             '/captain - captain shortlist\n/team - tap a manager to view picks (or type a name)'
         )
         send_message(chat_id, help_text)
         return
 
-    commands = {'/score', '/table', '/form', '/gw', '/rival', '/moves', '/banter', '/fixtures', '/recommend', '/captain', '/team'}
+    commands = {'/score', '/table', '/form', '/gw', '/rival', '/moves', '/transfers', '/banter', '/fixtures', '/recommend', '/captain', '/team'}
     if command not in commands:
         return
 
@@ -569,6 +702,9 @@ def handle_command(text, chat_id):
 
     if command == '/team' and not args:
         send_manager_choices(chat_id, league_id, 'team')
+        return
+    if command == '/recommend' and not args:
+        send_manager_choices(chat_id, league_id, 'recommend')
         return
     if command == '/rival' and not args:
         send_manager_choices(chat_id, league_id, 'rival')

@@ -9,17 +9,19 @@ Available Telegram commands:
 - `/form` — standings over the last five available gameweeks.
 - `/gw` — latest gameweek standings.
 - `/rival` — select two managers from Telegram buttons to compare them; typed names still work as well.
-- `/moves` — up to 15 recent transfers plus up to 10 recent chip activations or point hits across the league, with manager and gameweek.
+- `/moves` or `/transfers` — up to 15 recent transfers plus up to 10 recent chip activations or point hits across the league, with manager and gameweek.
 - `/banter` — friendly weekly bragging-rights recap.
 - `/fixtures` — next gameweek’s fixtures and the toughest upcoming fixture runs.
-- `/recommend` — a stats-based shortlist by position using form, points per game, minutes, availability, price, and fixture difficulty.
+- `/recommend` — choose a league manager (or type their name) for transfer ideas based on their current squad, bank, selling prices, and available players; includes an explicitly joking Rashford pick.
 - `/captain` — a top-three captain shortlist based on form, minutes, and fixture difficulty.
-- `/team` — select a manager from Telegram buttons to view their picks, captain, vice-captain, and bench when FPL makes the picks available. A typed manager name still works too.
+- `/team` — select a manager from Telegram buttons to view their picks, captain, vice-captain, bench, bank, and squad value when FPL makes the picks available. A typed manager name still works too.
 
-Recommendations are general stats-based suggestions, not personalized transfer advice or guaranteed points.
+Transfer ideas only suggest players not already in the selected manager’s squad and within the bank-plus-selling-price budget for a same-position swap. They are stats-based suggestions, not predictions or guaranteed points. The Rashford line is a tongue-in-cheek exception and is not checked against the FPL player list or budget.
+
+The `/team` response includes the manager’s bank and squad value. Set `FPL_PRIVATE_ENTRY_ID` to the manager entry whose squad, personalized recommendations, and transfer/chip activity should be kept private. Configure the same environment variable for the local polling bot, and keep its value out of source control.
 To show these commands in Telegram's slash-command menu, add them with BotFather using `/setcommands`.
 
-After deploying a version that adds callback buttons, call the protected `/setup` endpoint once again so Telegram registers callback-query updates with the webhook. No new secret or Cloudflare variable is needed.
+After deploying a version that adds callback buttons, call the protected `/setup` endpoint once again so Telegram registers callback-query updates with the webhook.
 
 ## Deploy from GitHub
 
@@ -32,6 +34,7 @@ After deploying a version that adds callback buttons, call the protected `/setup
    - `TG_CHAT_ID`
    - `FPL_LEAGUE_ID_2`
    - `TG_CHAT_ID_2`
+   - `FPL_PRIVATE_ENTRY_ID`
    - `TELEGRAM_WEBHOOK_SECRET`
    - `SETUP_SECRET`
 
