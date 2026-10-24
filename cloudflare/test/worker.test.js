@@ -6,6 +6,7 @@ const originalFetch = globalThis.fetch;
 const telegramReplies = [];
 const telegramCalls = [];
 const fplCalls = [];
+let picksAreEmpty = false;
 
 const env = {
 	TG_TOKEN: 'test-token',
@@ -22,6 +23,7 @@ beforeEach(() => {
 	telegramReplies.length = 0;
 	telegramCalls.length = 0;
 	fplCalls.length = 0;
+	picksAreEmpty = false;
 	globalThis.fetch = async (input, init = {}) => {
 		const url = String(input);
 		if (url.includes('/bootstrap-static/')) {
@@ -53,6 +55,7 @@ beforeEach(() => {
 		}
 		if (url.includes('/event/4/picks/')) {
 			fplCalls.push(url);
+			if (picksAreEmpty) return Response.json({ picks: [], entry_history: { bank: 20, value: 1000 } });
 			return Response.json({ picks: [
 				{ element: 101, position: 1, selling_price: 45 },
 				{ element: 102, position: 2, selling_price: 55, is_captain: true },
@@ -198,16 +201,24 @@ test('fixtures command shows the next round and difficult runs', async () => {
 	assert.match(telegramReplies.at(-1).text, /Toughest next 2-GW run/);
 });
 
-test('/recommend uses squad ownership, swap budget and the playful Rashford pick', async () => {
+test('/recommend gives five squad-aware picks without describing the Rashford recommendation as a joke', async () => {
 	await postUpdate(-1001, '/recommend Alpha');
 	const text = telegramReplies.at(-1).text;
-	assert.match(text, /GW5 transfer ideas for Alpha/);
-	assert.match(text, /MID \(swap out Player3; up to £7\.0m\):/);
-	assert.match(text, /Budget Midfielder \(BET, £7\.0m/);
-	assert.doesNotMatch(text, /Premium Midfielder/);
-	assert.doesNotMatch(text, /• Midfielder \(/);
-	assert.match(text, /Marcus Rashford — form 10\/10/);
-	assert.match(text, /not a stats- or budget-checked pick/);
+	assert.match(text, /GW5 transfer ideas for Alpha \(five players based on their squad\)/);
+	assert.match(text, /Budget Midfielder \(BET; £7\.0m; form 6; A ALP \(FDR 2\); within £7\.0m swap budget for Player3\)/);
+	assert.match(text, /Marcus Rashford \(form 10\/10\)/);
+	assert.equal(text.split('\n').filter((line) => /^\d+\. /.test(line)).length, 5);
+	assert.doesNotMatch(text, /troll|joke|banter/i);
+	assert.match(text, /above swap budget/);
+});
+
+test('/recommend still returns five suggestions when current squad picks are unavailable', async () => {
+	picksAreEmpty = true;
+	await postUpdate(-1001, '/recommend Alpha');
+	const text = telegramReplies.at(-1).text;
+	assert.equal(text.split('\n').filter((line) => /^\d+\. /.test(line)).length, 5);
+	assert.match(text, /Marcus Rashford \(form 10\/10\)/);
+	assert.doesNotMatch(text, /No .*recommendations|No picks are available/i);
 });
 
 test('/recommend without a manager offers personalized recommendation choices', async () => {
@@ -229,6 +240,7 @@ test('/captain returns a top three shortlist with a form caveat', async () => {
 	assert.match(text, /Vice-captain option: Forward/);
 	assert.match(text, /Marcus Rashford — form 10\/10/);
 	assert.match(text, /not predictions or guarantees/);
+	assert.doesNotMatch(text, /troll|joke|banter/i);
 });
 
 test('/moves shows the latest league transfers first with player names', async () => {
