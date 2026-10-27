@@ -95,6 +95,21 @@
     .chart-legend { display: flex; flex-wrap: wrap; gap: 8px 14px; margin-top: 10px; }
     .legend-item { display: flex; align-items: center; gap: 6px; color: #59657b; font-size: 11px; }
     .legend-swatch { width: 8px; height: 8px; border-radius: 50%; }
+    .forecast-panel { margin-top: 16px; }
+    .forecast-badges { display: flex; flex-wrap: wrap; gap: 8px; }
+    .forecast-badge { padding: 7px 10px; border: 1px solid var(--line); border-radius: 999px; background: #fafbfe; color: #59657b; font-size: 11px; }
+    .forecast-badge strong { color: var(--ink); }
+    .forecast-list { display: grid; gap: 15px; margin-top: 20px; }
+    .forecast-row { display: grid; grid-template-columns: minmax(150px, 1fr) minmax(150px, 1.4fr) minmax(155px, .9fr); align-items: center; gap: 18px; }
+    .forecast-manager { overflow: hidden; font-size: 13px; font-weight: 750; text-overflow: ellipsis; white-space: nowrap; }
+    .forecast-rank { display: block; margin-top: 2px; color: var(--muted); font-size: 11px; font-weight: 500; }
+    .forecast-bar-track { position: relative; height: 13px; overflow: hidden; border-radius: 999px; background: #f0f2f7; }
+    .forecast-bar { height: 100%; min-width: 4px; border-radius: inherit; background: linear-gradient(90deg, #566cf6, #a16af4); }
+    .forecast-points { text-align: right; white-space: nowrap; }
+    .forecast-points strong { display: block; font-size: 15px; }
+    .forecast-range { display: block; margin-top: 2px; color: var(--muted); font-size: 11px; }
+    .forecast-caption { margin: 18px 0 0; color: var(--muted); font-size: 11px; }
+    .forecast-empty { padding: 25px 0; color: var(--muted); }
     .activity-list { display: grid; gap: 0; }
     .activity-item { display: grid; grid-template-columns: 35px minmax(0, 1fr) auto; align-items: center; gap: 11px; padding: 13px 0; border-bottom: 1px solid var(--line); }
     .activity-item:last-child { border-bottom: 0; }
@@ -144,6 +159,8 @@
       .panel { padding: 17px 14px; }
       .chart-tabs { flex-direction: column; }
       .chart-tab { padding: 5px 7px; }
+      .forecast-row { grid-template-columns: minmax(105px, 1fr) minmax(80px, 1fr) auto; gap: 10px; }
+      .forecast-badges { gap: 6px; }
       .table-heading { align-items: flex-start; padding: 17px 14px 13px; }
       th, td { padding-inline: 13px; }
       .manager-name, .team-name { max-width: 145px; }
@@ -303,6 +320,116 @@
       return items.map((item) => `<div class="activity-item"><span class="activity-icon">${item.icon}</span><div class="activity-title">${escapeHtml(item.title)}<span class="activity-subtitle">${escapeHtml(item.subtitle)}</span></div><strong class="activity-value">${escapeHtml(item.value)}</strong></div>`).join('');
     }
 
+    function seededRandom(seed) {
+      return function random() {
+        seed |= 0;
+        seed = seed + 0x6D2B79F5 | 0;
+        let value = Math.imul(seed ^ seed >>> 15, 1 | seed);
+        value = value + Math.imul(value ^ value >>> 7, 61 | value) ^ value;
+        return ((value ^ value >>> 14) >>> 0) / 4294967296;
+      };
+    }
+
+    function forecastLeague(league, rows) {
+      const completed = Number(state.data.finishedGameweeks) || 0;
+      const remaining = Math.max(0, 38 - completed);
+      const forecasts = rows.map((row, index) => {
+        const history = row.history
+          .filter((event) => event.finished === true || (event.finished == null && event.gameweek <= completed))
+          .sort((a, b) => a.gameweek - b.gameweek);
+        const scores = history.map(netPoints);
+        const recent = scores.slice(-5);
+        const seasonAverage = scores.length ? scores.reduce((sum, score) => sum + score, 0) / scores.length : 0;
+        const recentAverage = recent.length ? recent.reduce((sum, score) => sum + score, 0) / recent.length : seasonAverage;
+        const expectedPerWeek = seasonAverage * .65 + recentAverage * .35;
+        const variance = scores.length > 1
+          ? scores.reduce((sum, score) => sum + (score - seasonAverage) ** 2, 0) / (scores.length - 1)
+          : 0;
+        return {
+          ...row,
+          forecastIndex: index,
+          actualFinished: scores.reduce((sum, score) => sum + score, 0),
+          expectedPerWeek,
+          volatility: Math.max(Math.sqrt(variance), 12),
+          finalPoints: [],
+          rankTotal: 0,
+          titleWins: 0,
+        };
+      });
+
+      if (completed < 2 || forecasts.some((forecast) => !forecast.history.length)) {
+        return { completed, remaining, available: false, managers: forecasts };
+      }
+
+      const simulations = remaining ? 3000 : 1;
+      const randomizers = forecasts.map((forecast) => seededRandom(
+        ((Number(league.id) || 0) ^ (Number(forecast.entry) || forecast.forecastIndex + 1) ^ completed) >>> 0
+      ));
+      for (let simulation = 0; simulation < simulations; simulation += 1) {
+        const totals = forecasts.map((forecast, managerIndex) => {
+          let points = forecast.actualFinished;
+          const random = randomizers[managerIndex];
+          for (let week = 0; week < remaining; week += 1) {
+            const first = Math.max(random(), 1e-9);
+            const normal = Math.sqrt(-2 * Math.log(first)) * Math.cos(2 * Math.PI * random());
+            points += Math.max(0, forecast.expectedPerWeek + forecast.volatility * normal);
+          }
+          return points;
+        });
+        const ordered = totals.map((points, index) => ({ points, index }))
+          .sort((a, b) => b.points - a.points || a.index - b.index);
+        const winningScore = ordered[0].points;
+        const tiedWinners = ordered.filter((item) => Math.abs(item.points - winningScore) < 1e-8);
+        tiedWinners.forEach((item) => { forecasts[item.index].titleWins += 1 / tiedWinners.length; });
+        ordered.forEach((item, rank) => {
+          const forecast = forecasts[item.index];
+          forecast.finalPoints.push(item.points);
+          forecast.rankTotal += rank + 1;
+        });
+      }
+
+      forecasts.forEach((forecast) => {
+        forecast.finalPoints.sort((a, b) => a - b);
+        forecast.projectedPoints = forecast.actualFinished + forecast.expectedPerWeek * remaining;
+        forecast.expectedRank = forecast.rankTotal / simulations;
+        forecast.titleProbability = forecast.titleWins / simulations;
+        forecast.lowPoints = forecast.finalPoints[Math.floor((simulations - 1) * .1)];
+        forecast.highPoints = forecast.finalPoints[Math.ceil((simulations - 1) * .9)];
+      });
+      return { completed, remaining, available: true, managers: forecasts };
+    }
+
+    function renderForecast(league, rows, forecast) {
+      const managers = [...forecast.managers].sort((a, b) => b.projectedPoints - a.projectedPoints);
+      const mostLikely = [...forecast.managers].sort((a, b) => b.titleProbability - a.titleProbability || a.expectedRank - b.expectedRank)[0];
+      const closestChallenger = managers[1];
+      const mostVolatile = [...forecast.managers].sort((a, b) => b.volatility - a.volatility)[0];
+      if (!forecast.available) {
+        return `<section class="panel forecast-panel"><div class="panel-heading"><div><h2>End-of-season forecast</h2><p class="panel-caption">Not enough completed gameweeks to make a useful projection.</p></div></div></section>`;
+      }
+
+      const maxPoints = Math.max(...managers.map((manager) => manager.projectedPoints), 1);
+      const progress = (points) => Math.max(1, Math.min(100, points / maxPoints * 100));
+      const summaryBadges = [
+        `<span class="forecast-badge">Title favorite <strong>${escapeHtml(mostLikely.manager)} · ${Math.round(mostLikely.titleProbability * 100)}%</strong></span>`,
+        closestChallenger ? `<span class="forecast-badge">Projected gap <strong>${numberFormat.format(Math.round(managers[0].projectedPoints - closestChallenger.projectedPoints))} pts</strong></span>` : '',
+        `<span class="forecast-badge">Most variable scores <strong>${escapeHtml(mostVolatile.manager)}</strong></span>`,
+      ].join('');
+      const forecastRows = managers.map((manager, index) => `<div class="forecast-row">
+        <div class="forecast-manager">${escapeHtml(manager.manager)}<span class="forecast-rank">Expected finish: #${manager.expectedRank.toFixed(1)} · ${Math.round(manager.titleProbability * 100)}% title chance</span></div>
+        <div class="forecast-bar-track" role="img" aria-label="${escapeHtml(manager.manager)} projected ${numberFormat.format(Math.round(manager.projectedPoints))} points">
+          <div class="forecast-bar" style="width:${progress(manager.projectedPoints)}%;opacity:${Math.max(.45, 1 - index * .1)}"></div>
+        </div>
+        <div class="forecast-points"><strong>${numberFormat.format(Math.round(manager.projectedPoints))} pts</strong><span class="forecast-range">Likely range ${numberFormat.format(Math.round(manager.lowPoints))}–${numberFormat.format(Math.round(manager.highPoints))}</span></div>
+      </div>`).join('');
+      return `<section class="panel forecast-panel">
+        <div class="panel-heading"><div><h2>End-of-season forecast</h2><p class="panel-caption">Projected final points and title race through GW38.</p></div><span class="forecast-badge"><strong>${forecast.remaining}</strong> GWs to go</span></div>
+        <div class="forecast-badges">${summaryBadges}</div>
+        <div class="forecast-list">${forecastRows}</div>
+        <p class="forecast-caption">Based on completed gameweeks through GW${forecast.completed}; combines season average (65%) and recent five-GW form (35%). Title chances and likely ranges come from 3,000 simulations using each manager’s score variation (with a 12-point weekly minimum). Illustrative only—not guaranteed results.</p>
+      </section>`;
+    }
+
     function renderTable(rows) {
       const sorters = {
         points: (a, b) => b.points - a.points,
@@ -334,6 +461,7 @@
     function render() {
       const league = currentLeague();
       const rows = managerRows(league);
+      const forecast = forecastLeague(league, rows);
       document.getElementById('league-title').textContent = league.name;
       document.getElementById('gameweek-number').textContent = state.data.gameweek || '—';
       renderSwitcher();
@@ -343,7 +471,7 @@
             <div class="chart-tabs" role="group" aria-label="Chart type"><button class="chart-tab" type="button" data-mode="cumulative" aria-pressed="${state.chartMode === 'cumulative'}">Season race</button><button class="chart-tab" type="button" data-mode="gameweek" aria-pressed="${state.chartMode === 'gameweek'}">GW${state.data.gameweek} scores</button></div>
           </div><div id="chart-content">${state.chartMode === 'cumulative' ? renderCumulativeChart(rows) : renderGameweekChart(rows)}</div></section>
           <section class="panel"><div class="panel-heading"><div><h2>League pulse</h2><p class="panel-caption">The stories behind the scoreboard.</p></div></div><div class="activity-list">${renderActivity(rows)}</div></section>
-        </div>${renderTable(rows)}`;
+        </div>${renderForecast(league, rows, forecast)}${renderTable(rows)}`;
       document.querySelectorAll('.chart-tab').forEach((button) => button.addEventListener('click', () => {
         state.chartMode = button.dataset.mode;
         render();

@@ -1,6 +1,8 @@
 # FPL League Room
 
-This static dashboard tracks the two configured classic leagues. It shows current standings, recent form, rank movement, and season/gameweek charts.
+This static dashboard tracks the two configured classic leagues. It shows current standings, recent form, rank movement, season/gameweek charts, and end-of-season forecasts.
+
+The forecast uses only completed gameweeks, blending season scoring average with recent form. Simulated title chances and likely finishing-point ranges are illustrative estimates, not guaranteed outcomes.
 
 The public FPL API data is refreshed and published by `.github/workflows/pages.yml` when the dashboard changes, on an hourly schedule, or when the workflow is run manually. The generated `data.json` is published with the page and is not committed to the repository.
 

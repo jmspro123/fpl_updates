@@ -45,7 +45,7 @@ def get_entry_history(entry_id):
     return data.get('current', [])
 
 
-def build_league(league_id):
+def build_league(league_id, finished_gameweeks):
     league_name, members = get_members(league_id)
     with concurrent.futures.ThreadPoolExecutor(max_workers=8) as executor:
         histories = list(executor.map(get_entry_history, (member['entry'] for member in members)))
@@ -65,6 +65,7 @@ def build_league(league_id):
                     'points': event['points'],
                     'transferCost': event['event_transfers_cost'],
                     'netPoints': event['points'] - event['event_transfers_cost'],
+                    'finished': event['event'] in finished_gameweeks,
                 }
                 for event in history
             ],
@@ -76,6 +77,7 @@ def build_league(league_id):
 def build_dashboard_data():
     bootstrap = fpl_get('bootstrap-static/')
     events = bootstrap.get('events', [])
+    finished_gameweeks = {event['id'] for event in events if event.get('finished')}
     current_event = next((event['id'] for event in events if event.get('is_current')), None)
     if current_event is None:
         current_event = max(
@@ -83,7 +85,7 @@ def build_dashboard_data():
             default=None,
         )
 
-    leagues = [build_league(league_id) for league_id in LEAGUE_IDS]
+    leagues = [build_league(league_id, finished_gameweeks) for league_id in LEAGUE_IDS]
     all_gameweeks = [
         event['gameweek']
         for league in leagues
@@ -95,6 +97,7 @@ def build_dashboard_data():
     return {
         'generatedAt': datetime.now(timezone.utc).isoformat(),
         'gameweek': gameweek,
+        'finishedGameweeks': max(finished_gameweeks, default=0),
         'leagues': leagues,
     }
 
