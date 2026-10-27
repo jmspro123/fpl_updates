@@ -4,6 +4,8 @@ This static dashboard tracks the two configured classic leagues. It shows curren
 
 The public FPL API data is refreshed and published by `.github/workflows/pages.yml` when the dashboard changes, on an hourly schedule, or when the workflow is run manually. The generated `data.json` is published with the page and is not committed to the repository.
 
+Before the first deployment, open the repository's **Settings → Pages** and set **Build and deployment → Source** to **GitHub Actions**. The first workflow run cannot enable Pages itself with GitHub's default workflow token.
+
 To preview locally:
 
 ```sh

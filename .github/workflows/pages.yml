@@ -5,7 +5,8 @@ on:
     branches:
       - main
     paths:
-      - 'website/**'
+      - 'website/index.html'
+      - 'website/build_data.py'
       - '.github/workflows/pages.yml'
   schedule:
     - cron: '17 * * * *'
