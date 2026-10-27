@@ -6,6 +6,8 @@ The public FPL API data is refreshed and published by `.github/workflows/pages.y
 
 Before the first deployment, open the repository's **Settings → Pages** and set **Build and deployment → Source** to **GitHub Actions**. The first workflow run cannot enable Pages itself with GitHub's default workflow token.
 
+After deployment, the public dashboard is available at [jmspro123.github.io/fpl_updates](https://jmspro123.github.io/fpl_updates/).
+
 To preview locally:
 
 ```sh
