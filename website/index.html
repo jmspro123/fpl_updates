@@ -1,0 +1,385 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#101a30">
+  <meta name="description" content="A live-look dashboard for two Fantasy Premier League mini-leagues.">
+  <title>FPL League Room</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --ink: #17233c;
+      --muted: #78839a;
+      --line: #e8ebf1;
+      --paper: #fff;
+      --canvas: #f4f6fa;
+      --navy: #101a30;
+      --lime: #c9f36a;
+      --coral: #ff765e;
+      --blue: #566cf6;
+      --shadow: 0 16px 42px rgb(26 39 68 / 7%);
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      background: var(--canvas);
+      color: var(--ink);
+      font: 15px/1.5 Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+    button, select { font: inherit; }
+    button:focus-visible, select:focus-visible { outline: 3px solid #93a2ff; outline-offset: 3px; }
+    .hero {
+      background:
+        radial-gradient(ellipse at 82% 0%, rgb(91 109 255 / 27%), transparent 34rem),
+        var(--navy);
+      color: #fff;
+      padding: 28px max(24px, calc((100vw - 1200px) / 2)) 42px;
+    }
+    .topbar, .hero-main, .section-heading, .panel-heading, .table-heading, .footer-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 20px;
+    }
+    .brand { display: flex; align-items: center; gap: 12px; font-size: 13px; font-weight: 750; letter-spacing: .12em; text-transform: uppercase; }
+    .brand-mark {
+      display: grid;
+      width: 36px;
+      height: 36px;
+      place-items: center;
+      border-radius: 12px;
+      background: var(--lime);
+      color: var(--navy);
+      font-size: 20px;
+      letter-spacing: -.08em;
+    }
+    .live-pill {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 7px 11px;
+      border: 1px solid rgb(255 255 255 / 16%);
+      border-radius: 999px;
+      color: #d3dbed;
+      font-size: 12px;
+    }
+    .live-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--lime); box-shadow: 0 0 12px var(--lime); }
+    .hero-main { align-items: end; margin-top: 40px; }
+    .eyebrow { margin: 0 0 9px; color: #a7b3cc; font-size: 12px; font-weight: 700; letter-spacing: .14em; text-transform: uppercase; }
+    h1 { margin: 0; font-size: clamp(32px, 5vw, 52px); line-height: 1.08; letter-spacing: -.045em; }
+    .hero-subtitle { max-width: 520px; margin: 13px 0 0; color: #aeb8cd; }
+    .gameweek-chip { min-width: 112px; padding: 13px 18px; border: 1px solid rgb(255 255 255 / 17%); border-radius: 16px; text-align: center; }
+    .gameweek-chip strong { display: block; color: var(--lime); font-size: 27px; letter-spacing: -.04em; }
+    .gameweek-chip span { color: #aeb8cd; font-size: 11px; font-weight: 700; letter-spacing: .12em; text-transform: uppercase; }
+    main { width: min(1200px, calc(100% - 48px)); margin: -20px auto 0; }
+    .league-switcher { display: flex; width: fit-content; max-width: 100%; gap: 4px; padding: 5px; border: 1px solid var(--line); border-radius: 14px; background: var(--paper); box-shadow: var(--shadow); }
+    .league-button { max-width: min(42vw, 280px); overflow: hidden; padding: 10px 16px; border: 0; border-radius: 10px; background: transparent; color: var(--muted); font-weight: 700; text-overflow: ellipsis; white-space: nowrap; cursor: pointer; }
+    .league-button[aria-pressed="true"] { background: var(--navy); color: #fff; }
+    .stats-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 14px; margin: 20px 0; }
+    .stat-card, .panel { border: 1px solid var(--line); border-radius: 18px; background: var(--paper); box-shadow: var(--shadow); }
+    .stat-card { min-height: 132px; padding: 18px 20px; }
+    .stat-label { display: block; color: var(--muted); font-size: 12px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; }
+    .stat-value { display: block; overflow: hidden; margin-top: 14px; font-size: clamp(22px, 3vw, 29px); font-weight: 780; letter-spacing: -.04em; text-overflow: ellipsis; white-space: nowrap; }
+    .stat-foot { display: block; margin-top: 2px; color: var(--muted); font-size: 12px; }
+    .content-grid { display: grid; grid-template-columns: minmax(0, 1.6fr) minmax(270px, .8fr); gap: 16px; }
+    .panel { min-width: 0; padding: 22px; }
+    .panel-heading { align-items: flex-start; margin-bottom: 15px; }
+    h2 { margin: 0; font-size: 17px; letter-spacing: -.025em; }
+    .panel-caption { margin: 4px 0 0; color: var(--muted); font-size: 12px; }
+    .chart-tabs { display: flex; gap: 4px; padding: 3px; border-radius: 10px; background: #f1f3f8; }
+    .chart-tab { padding: 7px 10px; border: 0; border-radius: 8px; background: transparent; color: var(--muted); font-size: 11px; font-weight: 750; cursor: pointer; white-space: nowrap; }
+    .chart-tab[aria-pressed="true"] { background: #fff; color: var(--ink); box-shadow: 0 1px 5px rgb(16 26 48 / 10%); }
+    .chart-wrap { min-height: 220px; }
+    .chart-wrap svg { display: block; width: 100%; height: auto; overflow: visible; }
+    .chart-legend { display: flex; flex-wrap: wrap; gap: 8px 14px; margin-top: 10px; }
+    .legend-item { display: flex; align-items: center; gap: 6px; color: #59657b; font-size: 11px; }
+    .legend-swatch { width: 8px; height: 8px; border-radius: 50%; }
+    .activity-list { display: grid; gap: 0; }
+    .activity-item { display: grid; grid-template-columns: 35px minmax(0, 1fr) auto; align-items: center; gap: 11px; padding: 13px 0; border-bottom: 1px solid var(--line); }
+    .activity-item:last-child { border-bottom: 0; }
+    .activity-icon { display: grid; width: 34px; height: 34px; place-items: center; border-radius: 11px; background: #f0f3ff; color: var(--blue); font-size: 14px; font-weight: 800; }
+    .activity-title { overflow: hidden; font-size: 13px; font-weight: 700; text-overflow: ellipsis; white-space: nowrap; }
+    .activity-subtitle { display: block; margin-top: 2px; color: var(--muted); font-size: 11px; }
+    .activity-value { font-size: 14px; font-weight: 800; white-space: nowrap; }
+    .table-panel { margin-top: 16px; padding: 0; overflow: hidden; }
+    .table-heading { padding: 20px 22px 16px; }
+    .sort-control { display: flex; align-items: center; gap: 8px; color: var(--muted); font-size: 12px; }
+    .sort-control select { padding: 8px 30px 8px 10px; border: 1px solid var(--line); border-radius: 9px; background-color: #fff; color: var(--ink); font-size: 12px; font-weight: 700; }
+    .table-scroll { overflow-x: auto; }
+    table { width: 100%; border-collapse: collapse; text-align: left; white-space: nowrap; }
+    th { padding: 11px 20px; background: #f8f9fc; color: var(--muted); font-size: 10px; font-weight: 750; letter-spacing: .09em; text-transform: uppercase; }
+    td { padding: 14px 20px; border-top: 1px solid #eff1f5; font-size: 13px; }
+    tbody tr:hover { background: #fbfcff; }
+    .rank-cell { width: 45px; color: var(--muted); font-weight: 700; }
+    .manager-cell { display: flex; align-items: center; gap: 11px; }
+    .manager-avatar { display: grid; width: 34px; height: 34px; flex: 0 0 auto; place-items: center; border-radius: 11px; background: #eef0ff; color: var(--blue); font-size: 11px; font-weight: 800; }
+    .manager-name { display: block; max-width: 210px; overflow: hidden; font-weight: 750; text-overflow: ellipsis; }
+    .team-name { display: block; max-width: 210px; overflow: hidden; margin-top: 2px; color: var(--muted); font-size: 11px; text-overflow: ellipsis; }
+    .points-cell { font-weight: 750; }
+    .points-strong { font-size: 14px; font-weight: 800; }
+    .move-up { color: #298455; font-weight: 750; }
+    .move-down { color: #d85d50; font-weight: 750; }
+    .move-flat { color: var(--muted); }
+    .loading, .error-state { padding: 45px 20px; color: var(--muted); text-align: center; }
+    .error-state strong { display: block; margin-bottom: 7px; color: var(--ink); }
+    .retry-button { margin-top: 14px; padding: 9px 14px; border: 0; border-radius: 9px; background: var(--navy); color: white; font-weight: 700; cursor: pointer; }
+    .footer-row { margin: 18px 0 32px; color: var(--muted); font-size: 11px; }
+    .footer-row a { color: #5368e8; font-weight: 700; text-decoration: none; }
+    .hidden { display: none; }
+    @media (max-width: 850px) {
+      .stats-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .content-grid { grid-template-columns: 1fr; }
+    }
+    @media (max-width: 560px) {
+      .hero { padding: 20px 18px 36px; }
+      .hero-main { align-items: flex-start; margin-top: 32px; }
+      .hero-subtitle { font-size: 13px; }
+      .gameweek-chip { min-width: 85px; padding: 10px 11px; }
+      main { width: calc(100% - 28px); }
+      .league-switcher { width: 100%; }
+      .league-button { flex: 1; padding-inline: 9px; }
+      .stats-grid { gap: 9px; margin: 14px 0; }
+      .stat-card { min-height: 112px; padding: 14px; }
+      .panel { padding: 17px 14px; }
+      .chart-tabs { flex-direction: column; }
+      .chart-tab { padding: 5px 7px; }
+      .table-heading { align-items: flex-start; padding: 17px 14px 13px; }
+      th, td { padding-inline: 13px; }
+      .manager-name, .team-name { max-width: 145px; }
+      .footer-row { align-items: flex-start; flex-direction: column; gap: 7px; }
+    }
+    @media (prefers-reduced-motion: no-preference) {
+      .league-button, .chart-tab, .stat-card { transition: background-color .18s ease, transform .18s ease; }
+      .stat-card:hover { transform: translateY(-2px); }
+    }
+  </style>
+</head>
+<body>
+  <header class="hero">
+    <div class="topbar">
+      <div class="brand"><span class="brand-mark">F</span><span>FPL League Room</span></div>
+      <div class="live-pill"><span class="live-dot"></span><span id="refresh-label">Fetching latest scores</span></div>
+    </div>
+    <div class="hero-main">
+      <div>
+        <p class="eyebrow">The season, between friends</p>
+        <h1 id="league-title">Your leagues.<br>One scoreboard.</h1>
+        <p class="hero-subtitle">A closer look at the bragging rights, gameweek swings, and season-long battles.</p>
+      </div>
+      <div class="gameweek-chip"><strong id="gameweek-number">—</strong><span>Gameweek</span></div>
+    </div>
+  </header>
+  <main>
+    <div id="league-switcher" class="league-switcher" role="group" aria-label="Choose a league"></div>
+    <div id="dashboard" aria-live="polite">
+      <div class="loading">Loading league data…</div>
+    </div>
+    <div id="error" class="error-state hidden" role="alert"></div>
+    <div id="footer" class="footer-row hidden">
+      <span id="updated-at"></span>
+      <a id="fpl-link" href="https://fantasy.premierleague.com/" target="_blank" rel="noreferrer">Open Fantasy Premier League ↗</a>
+    </div>
+  </main>
+  <script>
+    const palette = ['#566cf6', '#ff765e', '#12a886', '#a16af4', '#e3a72f', '#23a4c4', '#e05e9a', '#638a41', '#65748b', '#ce6f28'];
+    const state = { data: null, leagueIndex: 0, chartMode: 'cumulative', sort: 'points' };
+    const numberFormat = new Intl.NumberFormat('en');
+    const escapeHtml = (value) => String(value ?? '').replace(/[&<>"']/g, (char) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[char]);
+    const netPoints = (event) => Number(event.netPoints ?? (event.points - event.transferCost));
+
+    function currentLeague() {
+      return state.data.leagues[state.leagueIndex];
+    }
+
+    function managerRows(league) {
+      const weeks = [...new Set(league.managers.flatMap((manager) => manager.history.map((event) => event.gameweek)))].sort((a, b) => a - b);
+      const latestWeek = state.data.gameweek || Math.max(...weeks, 0);
+      const formWeeks = weeks.filter((week) => week <= latestWeek).slice(-5);
+      return league.managers.map((manager) => {
+        const latest = manager.history.find((event) => event.gameweek === latestWeek);
+        const form = manager.history.filter((event) => formWeeks.includes(event.gameweek)).reduce((sum, event) => sum + netPoints(event), 0);
+        const historyTotal = manager.history.filter((event) => event.gameweek <= latestWeek).reduce((sum, event) => sum + netPoints(event), 0);
+        return { ...manager, points: manager.totalPoints ?? historyTotal, gameweekPoints: latest ? netPoints(latest) : 0, form, latestWeek };
+      });
+    }
+
+    function renderSwitcher() {
+      const container = document.getElementById('league-switcher');
+      container.innerHTML = state.data.leagues.map((league, index) =>
+        `<button class="league-button" type="button" aria-pressed="${index === state.leagueIndex}" data-index="${index}">${escapeHtml(league.name)}</button>`
+      ).join('');
+      container.querySelectorAll('button').forEach((button) => button.addEventListener('click', () => {
+        state.leagueIndex = Number(button.dataset.index);
+        render();
+      }));
+    }
+
+    function renderStats(rows, league) {
+      const leader = [...rows].sort((a, b) => b.points - a.points)[0];
+      const highestWeek = [...rows].sort((a, b) => b.gameweekPoints - a.gameweekPoints)[0];
+      const bestForm = [...rows].sort((a, b) => b.form - a.form)[0];
+      const runnerUp = [...rows].sort((a, b) => b.points - a.points)[1];
+      const gap = runnerUp ? leader.points - runnerUp.points : 0;
+      return `<section class="stats-grid" aria-label="League highlights">
+        <article class="stat-card"><span class="stat-label">Season leader</span><strong class="stat-value">${escapeHtml(leader.manager)}</strong><span class="stat-foot">${numberFormat.format(leader.points)} points · ${gap ? `${numberFormat.format(gap)} ahead` : 'out in front'}</span></article>
+        <article class="stat-card"><span class="stat-label">GW${state.data.gameweek} top score</span><strong class="stat-value">${escapeHtml(highestWeek.manager)}</strong><span class="stat-foot">${numberFormat.format(highestWeek.gameweekPoints)} points this week</span></article>
+        <article class="stat-card"><span class="stat-label">Last 5 gameweeks</span><strong class="stat-value">${escapeHtml(bestForm.manager)}</strong><span class="stat-foot">${numberFormat.format(bestForm.form)} points · best recent form</span></article>
+        <article class="stat-card"><span class="stat-label">Managers in the mix</span><strong class="stat-value">${numberFormat.format(rows.length)}</strong><span class="stat-foot">${escapeHtml(league.name)} · classic league</span></article>
+      </section>`;
+    }
+
+    function svgText(x, y, text, anchor = 'middle') {
+      return `<text x="${x}" y="${y}" text-anchor="${anchor}" fill="#8993a7" font-size="10" font-family="inherit">${escapeHtml(text)}</text>`;
+    }
+
+    function renderCumulativeChart(rows) {
+      const weeks = [...new Set(rows.flatMap((manager) => manager.history.map((event) => event.gameweek)))].sort((a, b) => a - b);
+      if (!weeks.length) return '<div class="loading">No gameweek history is available yet.</div>';
+      const series = [...rows].sort((a, b) => b.points - a.points).slice(0, 8);
+      const values = series.flatMap((manager) => {
+        let total = 0;
+        const byWeek = new Map(manager.history.map((event) => [event.gameweek, netPoints(event)]));
+        return weeks.map((week) => { total += byWeek.get(week) || 0; return total; });
+      });
+      const max = Math.max(...values, 1);
+      const min = Math.min(0, ...values);
+      const width = 700, height = 250, left = 44, right = 18, top = 14, bottom = 34;
+      const plotWidth = width - left - right, plotHeight = height - top - bottom;
+      const x = (index) => left + (weeks.length === 1 ? plotWidth / 2 : index * plotWidth / (weeks.length - 1));
+      const y = (value) => top + (max === min ? plotHeight / 2 : (max - value) * plotHeight / (max - min));
+      const grid = Array.from({ length: 4 }, (_, index) => {
+        const value = min + (max - min) * index / 3;
+        const yy = y(value);
+        return `<line x1="${left}" x2="${width - right}" y1="${yy}" y2="${yy}" stroke="#edf0f5" stroke-dasharray="3 5"/>${svgText(left - 8, yy + 3, numberFormat.format(Math.round(value)), 'end')}`;
+      }).join('');
+      const paths = series.map((manager, managerIndex) => {
+        let total = 0;
+        const byWeek = new Map(manager.history.map((event) => [event.gameweek, netPoints(event)]));
+        const points = weeks.map((week, index) => {
+          total += byWeek.get(week) || 0;
+          return `${x(index)},${y(total)}`;
+        }).join(' ');
+        return `<polyline points="${points}" fill="none" stroke="${palette[managerIndex % palette.length]}" stroke-width="${managerIndex === 0 ? 3 : 2}" stroke-linecap="round" stroke-linejoin="round" opacity="${managerIndex === 0 ? 1 : .72}"/>`;
+      }).join('');
+      const xLabels = weeks.map((week, index) => index % Math.max(1, Math.ceil(weeks.length / 8)) === 0 || index === weeks.length - 1
+        ? svgText(x(index), height - 8, `GW${week}`)
+        : '').join('');
+      return `<div class="chart-wrap"><svg viewBox="0 0 ${width} ${height}" role="img" aria-label="Cumulative season points trend for the top eight managers">${grid}${paths}${xLabels}</svg></div>
+        <div class="chart-legend">${series.map((manager, index) => `<span class="legend-item"><i class="legend-swatch" style="background:${palette[index % palette.length]}"></i>${escapeHtml(manager.manager)}</span>`).join('')}</div>`;
+    }
+
+    function renderGameweekChart(rows) {
+      const latestWeek = state.data.gameweek;
+      const series = [...rows].sort((a, b) => b.gameweekPoints - a.gameweekPoints).slice(0, 10);
+      const max = Math.max(...series.map((manager) => manager.gameweekPoints), 1);
+      const width = 700, left = 140, right = 45, top = 12, rowHeight = 24;
+      const height = top + series.length * rowHeight + 10;
+      const barWidth = width - left - right;
+      const bars = series.map((manager, index) => {
+        const yy = top + index * rowHeight;
+        const value = Math.max(0, manager.gameweekPoints);
+        const fill = palette[index % palette.length];
+        return `${svgText(left - 10, yy + 14, manager.manager.length > 19 ? `${manager.manager.slice(0, 18)}…` : manager.manager, 'end')}
+          <rect x="${left}" y="${yy + 3}" width="${barWidth}" height="13" rx="6.5" fill="#f0f2f7"/>
+          <rect x="${left}" y="${yy + 3}" width="${barWidth * value / max}" height="13" rx="6.5" fill="${fill}"/>
+          ${svgText(Math.min(width - 4, left + barWidth * value / max + 8), yy + 14, numberFormat.format(value), 'start')}`;
+      }).join('');
+      return `<div class="chart-wrap"><svg viewBox="0 0 ${width} ${height}" role="img" aria-label="Top ten scores in gameweek ${latestWeek}">${bars}</svg></div>`;
+    }
+
+    function renderActivity(rows) {
+      const highest = [...rows].sort((a, b) => b.gameweekPoints - a.gameweekPoints)[0];
+      const formLeader = [...rows].sort((a, b) => b.form - a.form)[0];
+      const seasonLeader = [...rows].sort((a, b) => b.points - a.points)[0];
+      const movers = rows.filter((row) => row.lastRank != null && row.rank != null).map((row) => ({ ...row, movement: row.lastRank - row.rank })).sort((a, b) => b.movement - a.movement);
+      const biggestMover = movers[0];
+      const items = [
+        { icon: '↑', title: highest.manager, subtitle: `Biggest haul in GW${state.data.gameweek}`, value: `+${numberFormat.format(highest.gameweekPoints)}` },
+        { icon: '✦', title: formLeader.manager, subtitle: 'Most points across the last 5 GWs', value: numberFormat.format(formLeader.form) },
+        { icon: '♛', title: seasonLeader.manager, subtitle: 'Sitting at the top of the table', value: `#${seasonLeader.rank || 1}` },
+        ...(biggestMover && biggestMover.movement > 0 ? [{ icon: '↗', title: biggestMover.manager, subtitle: `Biggest climb · up ${biggestMover.movement} place${biggestMover.movement === 1 ? '' : 's'}`, value: `+${biggestMover.movement}` }] : []),
+      ];
+      return items.map((item) => `<div class="activity-item"><span class="activity-icon">${item.icon}</span><div class="activity-title">${escapeHtml(item.title)}<span class="activity-subtitle">${escapeHtml(item.subtitle)}</span></div><strong class="activity-value">${escapeHtml(item.value)}</strong></div>`).join('');
+    }
+
+    function renderTable(rows) {
+      const sorters = {
+        points: (a, b) => b.points - a.points,
+        gameweek: (a, b) => b.gameweekPoints - a.gameweekPoints,
+        form: (a, b) => b.form - a.form,
+        movement: (a, b) => (b.lastRank - b.rank) - (a.lastRank - a.rank),
+      };
+      const sorted = [...rows].sort(sorters[state.sort]);
+      return `<div class="table-panel panel">
+        <div class="table-heading"><div><h2>Full standings</h2><p class="panel-caption">Every manager, every point, all season long.</p></div>
+          <label class="sort-control">Sort by <select id="sort-select" aria-label="Sort standings">
+            <option value="points" ${state.sort === 'points' ? 'selected' : ''}>Total points</option>
+            <option value="gameweek" ${state.sort === 'gameweek' ? 'selected' : ''}>This gameweek</option>
+            <option value="form" ${state.sort === 'form' ? 'selected' : ''}>Last 5 GWs</option>
+            <option value="movement" ${state.sort === 'movement' ? 'selected' : ''}>Rank movement</option>
+          </select></label>
+        </div>
+        <div class="table-scroll"><table><thead><tr><th>Rank</th><th>Manager</th><th>Total points</th><th>GW${state.data.gameweek}</th><th>Last 5 GWs</th><th>Rank change</th></tr></thead><tbody>
+          ${sorted.map((manager, index) => {
+            const movement = manager.lastRank != null && manager.rank != null ? manager.lastRank - manager.rank : 0;
+            const movementMarkup = movement > 0 ? `<span class="move-up">↑ ${movement}</span>` : movement < 0 ? `<span class="move-down">↓ ${Math.abs(movement)}</span>` : '<span class="move-flat">—</span>';
+            const initials = manager.manager.trim().split(/\s+/).slice(0, 2).map((part) => part[0] || '').join('').toUpperCase();
+            return `<tr><td class="rank-cell">${manager.rank || index + 1}</td><td><div class="manager-cell"><span class="manager-avatar">${escapeHtml(initials)}</span><span><span class="manager-name">${escapeHtml(manager.manager)}</span><span class="team-name">${escapeHtml(manager.team)}</span></span></div></td><td class="points-cell">${numberFormat.format(manager.points)}</td><td><span class="points-strong">${numberFormat.format(manager.gameweekPoints)}</span></td><td>${numberFormat.format(manager.form)}</td><td>${movementMarkup}</td></tr>`;
+          }).join('')}
+        </tbody></table></div>
+      </div>`;
+    }
+
+    function render() {
+      const league = currentLeague();
+      const rows = managerRows(league);
+      document.getElementById('league-title').textContent = league.name;
+      document.getElementById('gameweek-number').textContent = state.data.gameweek || '—';
+      renderSwitcher();
+      document.getElementById('dashboard').innerHTML = `${renderStats(rows, league)}
+        <div class="content-grid">
+          <section class="panel"><div class="panel-heading"><div><h2>Season at a glance</h2><p class="panel-caption" id="chart-caption">Cumulative points race through GW${state.data.gameweek}</p></div>
+            <div class="chart-tabs" role="group" aria-label="Chart type"><button class="chart-tab" type="button" data-mode="cumulative" aria-pressed="${state.chartMode === 'cumulative'}">Season race</button><button class="chart-tab" type="button" data-mode="gameweek" aria-pressed="${state.chartMode === 'gameweek'}">GW${state.data.gameweek} scores</button></div>
+          </div><div id="chart-content">${state.chartMode === 'cumulative' ? renderCumulativeChart(rows) : renderGameweekChart(rows)}</div></section>
+          <section class="panel"><div class="panel-heading"><div><h2>League pulse</h2><p class="panel-caption">The stories behind the scoreboard.</p></div></div><div class="activity-list">${renderActivity(rows)}</div></section>
+        </div>${renderTable(rows)}`;
+      document.querySelectorAll('.chart-tab').forEach((button) => button.addEventListener('click', () => {
+        state.chartMode = button.dataset.mode;
+        render();
+      }));
+      document.getElementById('sort-select').addEventListener('change', (event) => {
+        state.sort = event.target.value;
+        render();
+      });
+      document.getElementById('footer').classList.remove('hidden');
+    }
+
+    async function loadDashboard() {
+      const dashboard = document.getElementById('dashboard');
+      const error = document.getElementById('error');
+      dashboard.innerHTML = '<div class="loading">Loading league data…</div>';
+      error.classList.add('hidden');
+      try {
+        const response = await fetch(`./data.json?t=${Date.now()}`, { cache: 'no-store' });
+        if (!response.ok) throw new Error(`Could not load league data (HTTP ${response.status}).`);
+        const data = await response.json();
+        if (!Array.isArray(data.leagues) || data.leagues.length === 0) throw new Error('No league data is available yet.');
+        state.data = data;
+        state.leagueIndex = Math.min(state.leagueIndex, data.leagues.length - 1);
+        document.getElementById('refresh-label').textContent = `Updated ${new Date(data.generatedAt).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}`;
+        document.getElementById('updated-at').textContent = `Data refreshed ${new Date(data.generatedAt).toLocaleString()} · Scores can change while a gameweek is live.`;
+        render();
+      } catch (loadError) {
+        dashboard.innerHTML = '';
+        error.innerHTML = `<strong>Couldn’t load the league dashboard.</strong>${escapeHtml(loadError.message)}<br><button class="retry-button" type="button">Try again</button>`;
+        error.classList.remove('hidden');
+        error.querySelector('button').addEventListener('click', loadDashboard);
+        document.getElementById('refresh-label').textContent = 'Data unavailable';
+      }
+    }
+
+    loadDashboard();
+  </script>
+</body>
+</html>
