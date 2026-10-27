@@ -1,6 +1,6 @@
 # FPL League Room
 
-This static dashboard tracks the two configured classic leagues. It shows current standings, recent form, rank movement, season/gameweek charts, and end-of-season forecasts.
+This static dashboard tracks the two configured classic leagues. It shows current standings, recent form, rank movement, season/gameweek charts, a selectable gameweek archive, and end-of-season forecasts.
 
 The forecast uses only completed gameweeks, blending season scoring average with recent form. Simulated title chances and likely finishing-point ranges are illustrative estimates, not guaranteed outcomes.
 

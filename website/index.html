@@ -110,6 +110,15 @@
     .forecast-range { display: block; margin-top: 2px; color: var(--muted); font-size: 11px; }
     .forecast-caption { margin: 18px 0 0; color: var(--muted); font-size: 11px; }
     .forecast-empty { padding: 25px 0; color: var(--muted); }
+    .archive-panel { margin-top: 16px; padding: 0; overflow: hidden; }
+    .archive-heading { padding: 20px 22px 16px; }
+    .archive-controls { display: flex; align-items: center; gap: 8px; }
+    .archive-controls select { min-width: 118px; }
+    .archive-step { width: 35px; height: 35px; border: 1px solid var(--line); border-radius: 9px; background: #fff; color: var(--ink); font-size: 22px; line-height: 1; cursor: pointer; }
+    .archive-step:disabled { color: #b7bfcd; background: #f7f8fb; cursor: not-allowed; }
+    .archive-summary { display: flex; flex-wrap: wrap; gap: 8px; padding: 0 22px; }
+    .archive-chart { min-height: 0; padding: 18px 22px 8px; }
+    .archive-panel .forecast-caption { margin: 0; padding: 15px 22px 20px; }
     .activity-list { display: grid; gap: 0; }
     .activity-item { display: grid; grid-template-columns: 35px minmax(0, 1fr) auto; align-items: center; gap: 11px; padding: 13px 0; border-bottom: 1px solid var(--line); }
     .activity-item:last-child { border-bottom: 0; }
@@ -161,6 +170,13 @@
       .chart-tab { padding: 5px 7px; }
       .forecast-row { grid-template-columns: minmax(105px, 1fr) minmax(80px, 1fr) auto; gap: 10px; }
       .forecast-badges { gap: 6px; }
+      .archive-heading { align-items: flex-start; flex-direction: column; padding: 17px 14px 13px; }
+      .archive-controls { width: 100%; }
+      .archive-controls .sort-control { flex: 1; justify-content: center; }
+      .archive-controls select { min-width: 0; }
+      .archive-summary { padding-inline: 14px; }
+      .archive-chart { padding-inline: 12px; }
+      .archive-panel .forecast-caption { padding: 12px 14px 17px; }
       .table-heading { align-items: flex-start; padding: 17px 14px 13px; }
       th, td { padding-inline: 13px; }
       .manager-name, .team-name { max-width: 145px; }
@@ -200,13 +216,24 @@
   </main>
   <script>
     const palette = ['#566cf6', '#ff765e', '#12a886', '#a16af4', '#e3a72f', '#23a4c4', '#e05e9a', '#638a41', '#65748b', '#ce6f28'];
-    const state = { data: null, leagueIndex: 0, chartMode: 'cumulative', sort: 'points' };
+    const state = { data: null, leagueIndex: 0, chartMode: 'cumulative', sort: 'points', archiveWeek: null };
     const numberFormat = new Intl.NumberFormat('en');
     const escapeHtml = (value) => String(value ?? '').replace(/[&<>"']/g, (char) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[char]);
     const netPoints = (event) => Number(event.netPoints ?? (event.points - event.transferCost));
 
     function currentLeague() {
       return state.data.leagues[state.leagueIndex];
+    }
+
+    function availableGameweeks(league) {
+      return [...new Set(league.managers.flatMap((manager) => manager.history.map((event) => event.gameweek)))]
+        .sort((a, b) => a - b);
+    }
+
+    function selectedArchiveWeek(league) {
+      const weeks = availableGameweeks(league);
+      if (!weeks.length) return null;
+      return weeks.includes(state.archiveWeek) ? state.archiveWeek : weeks[weeks.length - 1];
     }
 
     function managerRows(league) {
@@ -430,6 +457,71 @@
       </section>`;
     }
 
+    function renderGameweekArchive(league) {
+      const weeks = availableGameweeks(league);
+      const selectedWeek = selectedArchiveWeek(league);
+      if (selectedWeek == null) {
+        return `<section class="panel forecast-panel"><h2>Gameweek archive</h2><p class="panel-caption">No gameweek history is available yet.</p></section>`;
+      }
+
+      const scores = league.managers.map((manager) => {
+        const event = manager.history.find((item) => item.gameweek === selectedWeek);
+        const completedPoints = manager.history
+          .filter((item) => item.gameweek <= selectedWeek)
+          .reduce((sum, item) => sum + netPoints(item), 0);
+        return { ...manager, event, weeklyPoints: event ? netPoints(event) : null, completedPoints };
+      });
+      const ranked = [...scores].sort((a, b) => b.completedPoints - a.completedPoints);
+      const ranks = new Map(ranked.map((manager, index) => [manager.entry, index + 1]));
+      const chartRows = [...scores].sort((a, b) => (b.weeklyPoints ?? -Infinity) - (a.weeklyPoints ?? -Infinity));
+      const chartMax = Math.max(1, ...chartRows.map((manager) => manager.weeklyPoints ?? 0));
+      const topScore = chartRows.find((manager) => manager.weeklyPoints != null);
+      const average = chartRows.reduce((sum, manager) => sum + (manager.weeklyPoints ?? 0), 0) /
+        Math.max(1, chartRows.filter((manager) => manager.weeklyPoints != null).length);
+      const isFinished = selectedWeek <= Number(state.data.finishedGameweeks || 0);
+      const width = 700, left = 150, right = 42, top = 14, rowHeight = 32;
+      const height = top + chartRows.length * rowHeight + 10;
+      const maxBarWidth = width - left - right;
+      const chart = chartRows.map((manager, index) => {
+        const y = top + index * rowHeight;
+        const points = manager.weeklyPoints;
+        const barWidth = points == null ? 0 : maxBarWidth * Math.max(0, points) / chartMax;
+        return `${svgText(left - 10, y + 16, manager.manager.length > 21 ? `${manager.manager.slice(0, 20)}…` : manager.manager, 'end')}
+          <rect x="${left}" y="${y + 4}" width="${maxBarWidth}" height="16" rx="8" fill="#f0f2f7"/>
+          ${points == null ? '' : `<rect x="${left}" y="${y + 4}" width="${barWidth}" height="16" rx="8" fill="${palette[index % palette.length]}"/>`}
+          ${svgText(Math.min(width - 3, left + barWidth + 8), y + 16, points == null ? '—' : numberFormat.format(points), 'start')}`;
+      }).join('');
+      const tableRows = chartRows.map((manager) => `<tr>
+        <td class="rank-cell">${ranks.get(manager.entry)}</td>
+        <td><div class="manager-cell"><span class="manager-avatar">${escapeHtml(manager.manager.trim().split(/\s+/).slice(0, 2).map((part) => part[0] || '').join('').toUpperCase())}</span><span><span class="manager-name">${escapeHtml(manager.manager)}</span><span class="team-name">${escapeHtml(manager.team)}</span></span></div></td>
+        <td class="points-cell">${manager.weeklyPoints == null ? '—' : numberFormat.format(manager.weeklyPoints)}</td>
+        <td>${manager.event ? numberFormat.format(manager.event.transferCost) : '—'}</td>
+        <td class="points-cell">${numberFormat.format(manager.completedPoints)}</td>
+      </tr>`).join('');
+      const selectedIndex = weeks.indexOf(selectedWeek);
+
+      return `<section class="panel archive-panel">
+        <div class="table-heading archive-heading">
+          <div><h2>Gameweek archive</h2><p class="panel-caption">Explore weekly scores and standings across the season.</p></div>
+          <div class="archive-controls">
+            <button class="archive-step" type="button" data-step="-1" aria-label="Previous gameweek" ${selectedIndex <= 0 ? 'disabled' : ''}>‹</button>
+            <label class="sort-control">Gameweek <select id="archive-week" aria-label="Choose historical gameweek">
+              ${weeks.map((week) => `<option value="${week}" ${week === selectedWeek ? 'selected' : ''}>GW${week}${week > Number(state.data.finishedGameweeks || 0) ? ' · live' : ''}</option>`).join('')}
+            </select></label>
+            <button class="archive-step" type="button" data-step="1" aria-label="Next gameweek" ${selectedIndex >= weeks.length - 1 ? 'disabled' : ''}>›</button>
+          </div>
+        </div>
+        <div class="archive-summary">
+          <span class="forecast-badge">${isFinished ? 'Final scores' : 'Live scores'} <strong>GW${selectedWeek}</strong></span>
+          ${topScore ? `<span class="forecast-badge">Top weekly score <strong>${escapeHtml(topScore.manager)} · ${numberFormat.format(topScore.weeklyPoints)} pts</strong></span>` : ''}
+          <span class="forecast-badge">League average <strong>${numberFormat.format(Math.round(average * 10) / 10)} pts</strong></span>
+        </div>
+        <div class="archive-chart chart-wrap"><svg viewBox="0 0 ${width} ${height}" role="img" aria-label="Net points scored by each manager in gameweek ${selectedWeek}">${chart}</svg></div>
+        <div class="table-scroll"><table><thead><tr><th>GW${selectedWeek} rank</th><th>Manager</th><th>Net points</th><th>Transfer cost</th><th>Total through GW${selectedWeek}</th></tr></thead><tbody>${tableRows}</tbody></table></div>
+        <p class="forecast-caption">Weekly points are after transfer hits. Rank and cumulative points are calculated through the selected gameweek; unfinished gameweeks may still change.</p>
+      </section>`;
+    }
+
     function renderTable(rows) {
       const sorters = {
         points: (a, b) => b.points - a.points,
@@ -471,7 +563,7 @@
             <div class="chart-tabs" role="group" aria-label="Chart type"><button class="chart-tab" type="button" data-mode="cumulative" aria-pressed="${state.chartMode === 'cumulative'}">Season race</button><button class="chart-tab" type="button" data-mode="gameweek" aria-pressed="${state.chartMode === 'gameweek'}">GW${state.data.gameweek} scores</button></div>
           </div><div id="chart-content">${state.chartMode === 'cumulative' ? renderCumulativeChart(rows) : renderGameweekChart(rows)}</div></section>
           <section class="panel"><div class="panel-heading"><div><h2>League pulse</h2><p class="panel-caption">The stories behind the scoreboard.</p></div></div><div class="activity-list">${renderActivity(rows)}</div></section>
-        </div>${renderForecast(league, rows, forecast)}${renderTable(rows)}`;
+        </div>${renderForecast(league, rows, forecast)}${renderGameweekArchive(league)}${renderTable(rows)}`;
       document.querySelectorAll('.chart-tab').forEach((button) => button.addEventListener('click', () => {
         state.chartMode = button.dataset.mode;
         render();
@@ -480,6 +572,16 @@
         state.sort = event.target.value;
         render();
       });
+      document.getElementById('archive-week').addEventListener('change', (event) => {
+        state.archiveWeek = Number(event.target.value);
+        render();
+      });
+      document.querySelectorAll('.archive-step').forEach((button) => button.addEventListener('click', () => {
+        const weeks = availableGameweeks(currentLeague());
+        const currentIndex = weeks.indexOf(selectedArchiveWeek(currentLeague()));
+        state.archiveWeek = weeks[currentIndex + Number(button.dataset.step)];
+        render();
+      }));
       document.getElementById('footer').classList.remove('hidden');
     }
 
