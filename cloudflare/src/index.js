@@ -399,10 +399,11 @@ async function personalizedRecommendationsText(leagueId, query, selectedEntryId,
 	}
 	if (isPrivateEntry(member.entry, privateEntryId)) return 'Personalized recommendations are not available for this manager.';
 
-	const [bootstrap, fixtures, history] = await Promise.all([
+	const [bootstrap, fixtures, history, transfers] = await Promise.all([
 		fplGet('bootstrap-static/'),
 		fplGet('fixtures/'),
 		fplGet(`entry/${member.entry}/history/`),
+		fplGet(`entry/${member.entry}/transfers/`),
 	]);
 	const currentGameweek = (bootstrap.events || []).find((event) => event.is_current)?.id
 		|| Math.max(0, ...(history.current || []).map((event) => event.event));
@@ -410,8 +411,7 @@ async function personalizedRecommendationsText(leagueId, query, selectedEntryId,
 	const picksData = await fplGet(`entry/${member.entry}/event/${currentGameweek}/picks/`);
 	const picks = picksData.picks || [];
 	const bank = picksData.entry_history?.bank;
-	if (picks.length === 0) return `No current squad picks are available for ${member.player_name}.`;
-	if (!Number.isFinite(bank)) return 'The FPL API did not provide this manager’s bank.';
+	const hasBank = Number.isFinite(bank);
 
 	const nextEvent = getNextGameweek(bootstrap);
 	if (!nextEvent) return 'No upcoming gameweek is currently available for recommendations.';
@@ -428,36 +428,50 @@ async function personalizedRecommendationsText(leagueId, query, selectedEntryId,
 	const outgoingPlayers = [];
 	for (const pick of picks) {
 		const player = elementsById.get(pick.element);
-		if (!player || !Number.isFinite(pick.selling_price)) continue;
+		if (!player || !Number.isFinite(player.now_cost)) continue;
+		let sellingPrice = pick.selling_price;
+		if (!Number.isFinite(sellingPrice)) {
+			const latestPurchase = (transfers || [])
+				.filter((transfer) => transfer.element_in === player.id
+					&& Number.isFinite(transfer.element_in_cost))
+				.sort((a, b) => new Date(b.time).getTime() - new Date(a.time).getTime())[0];
+			const purchasePrice = latestPurchase?.element_in_cost;
+			sellingPrice = Number.isFinite(purchasePrice) && player.now_cost > purchasePrice
+				? purchasePrice + Math.floor((player.now_cost - purchasePrice) / 2)
+				: player.now_cost;
+		}
 		const score = rankedById.get(player.id)?.score ?? Number.NEGATIVE_INFINITY;
 		outgoingPlayers.push({
 			id: player.id,
 			name: player.web_name || `Player ${player.id}`,
 			position: player.element_type,
 			teamId: player.team,
-			sellingPrice: pick.selling_price,
+			sellingPrice,
 			score,
 		});
 	}
 
 	const possibleSwaps = [];
 	for (const outgoing of outgoingPlayers) {
-		const budget = bank + outgoing.sellingPrice;
 		for (const incoming of ranked) {
-			if (ownedIds.has(incoming.id) || incoming.position !== outgoing.position) continue;
-			if (incoming.price * 10 > budget) continue;
+			if (ownedIds.has(incoming.id) || incoming.position !== outgoing.position
+				|| /rashford/i.test(incoming.name)) continue;
 			const clubCount = (clubCounts.get(incoming.teamId) || 0)
 				- (incoming.teamId === outgoing.teamId ? 1 : 0);
 			if (clubCount >= 3) continue;
+			const netCost = incoming.price * 10 - outgoing.sellingPrice;
+			const shortfall = hasBank ? Math.max(0, netCost - bank) : Number.POSITIVE_INFINITY;
 			possibleSwaps.push({
 				outgoing,
 				incoming,
 				scoreChange: incoming.score - outgoing.score,
-				netCost: incoming.price * 10 - outgoing.sellingPrice,
+				netCost,
+				shortfall,
 			});
 		}
 	}
-	possibleSwaps.sort((a, b) => b.scoreChange - a.scoreChange
+	possibleSwaps.sort((a, b) => a.shortfall - b.shortfall
+		|| b.scoreChange - a.scoreChange
 		|| b.incoming.score - a.incoming.score
 		|| Math.abs(a.netCost) - Math.abs(b.netCost));
 	const recommendations = [];
@@ -471,27 +485,42 @@ async function personalizedRecommendationsText(leagueId, query, selectedEntryId,
 		selectedIncomingIds.add(suggestion.incoming.id);
 		if (recommendations.length === 4) break;
 	}
+	for (const incoming of ranked) {
+		if (recommendations.length === 4) break;
+		if (ownedIds.has(incoming.id) || selectedIncomingIds.has(incoming.id)
+			|| /rashford/i.test(incoming.name)) continue;
+		recommendations.push({ incoming });
+		selectedIncomingIds.add(incoming.id);
+	}
 
-	const maxExtraFreeTransfers = bootstrap.game_settings?.max_extra_free_transfers;
-	const freeTransfers = calculateFreeTransfers(
-		history,
-		nextEvent.id,
-		Number.isInteger(maxExtraFreeTransfers) ? maxExtraFreeTransfers + 1 : undefined,
-	);
+	const maxFreeTransfers = bootstrap.game_settings?.max_extra_free_transfers;
+	const transferCap = Number.isInteger(maxFreeTransfers) ? maxFreeTransfers : undefined;
+	const currentFreeTransfers = calculateFreeTransfers(history, currentGameweek, transferCap);
+	const nextFreeTransfers = calculateFreeTransfers(history, nextEvent.id, transferCap);
 	const lines = [
 		`💡 GW${nextEvent.id} transfer options for ${member.player_name}:`,
 	];
-	if (freeTransfers !== undefined) lines.push(`Free transfers: ${freeTransfers}`);
+	lines.push(`Free transfers: ${currentFreeTransfers ?? 'unavailable'} left for GW${currentGameweek}; `
+		+ `${nextFreeTransfers ?? 'unavailable'} available for GW${nextEvent.id}`);
+	if (picks.length === 0) lines.push('Squad picks are unavailable; showing general player ideas.');
+	else if (!hasBank) lines.push('Bank unavailable; affordability cannot be checked.');
 	lines.push('1. Marcus Rashford');
-	if (recommendations.length === 0) {
-		lines.push('No affordable same-position transfer options are available.');
-		return lines.join('\n');
-	}
 	recommendations.forEach(({ outgoing, incoming, netCost }, index) => {
-		const remainingBank = bank - netCost;
-		lines.push(`${index + 2}. ${outgoing.name} → ${incoming.name} `
-			+ `(bank £${(remainingBank / 10).toFixed(1)}m after move; `
-			+ `form ${incoming.form}; ${incoming.fixture})`);
+		const detail = [`form ${incoming.form}`, incoming.fixture];
+		if (outgoing && Number.isFinite(netCost) && hasBank) {
+			const remainingBank = bank - netCost;
+			detail.unshift(remainingBank >= 0
+				? `est. bank £${(remainingBank / 10).toFixed(1)}m after move`
+				: `£${(-remainingBank / 10).toFixed(1)}m over budget`);
+			lines.push(`${index + 2}. ${outgoing.name} → ${incoming.name} (${detail.join('; ')})`);
+			return;
+		}
+		if (outgoing) {
+			lines.push(`${index + 2}. ${outgoing.name} → ${incoming.name} (${detail.join('; ')})`);
+			return;
+		}
+		detail.unshift(`£${incoming.price.toFixed(1)}m`);
+		lines.push(`${index + 2}. Consider ${incoming.name} (${detail.join('; ')})`);
 	});
 	lines.push('', 'Stats-based estimates from form, minutes and fixtures—not guaranteed points.');
 	return lines.join('\n');

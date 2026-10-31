@@ -324,7 +324,7 @@ def build_recommendations_text(captain_only=False):
     return '\n'.join(lines)
 
 
-def build_transfer_suggestions(picks, elements, ranked, bank, limit=4):
+def build_transfer_suggestions(picks, elements, ranked, bank, transfers=(), limit=4):
     ranked_by_id = {player['id']: player for player in ranked}
     owned_ids = {pick['element'] for pick in picks}
     club_counts = {}
@@ -332,13 +332,27 @@ def build_transfer_suggestions(picks, elements, ranked, bank, limit=4):
 
     for pick in picks:
         player = elements.get(pick['element'])
-        selling_price = pick.get('selling_price')
         if not player:
             continue
+        selling_price = pick.get('selling_price')
+        if not isinstance(selling_price, (int, float)) or isinstance(selling_price, bool):
+            current_price = player.get('now_cost')
+            purchases = [
+                transfer for transfer in transfers
+                if transfer.get('element_in') == player['id']
+                and isinstance(transfer.get('element_in_cost'), (int, float))
+            ]
+            purchase_price = max(purchases, key=lambda transfer: transfer.get('time', ''))['element_in_cost'] \
+                if purchases else None
+            if not isinstance(current_price, (int, float)):
+                continue
+            selling_price = (
+                purchase_price + (current_price - purchase_price) // 2
+                if isinstance(purchase_price, (int, float)) and current_price > purchase_price
+                else current_price
+            )
         team_id = player.get('team')
         club_counts[team_id] = club_counts.get(team_id, 0) + 1
-        if not isinstance(selling_price, (int, float)) or isinstance(selling_price, bool):
-            continue
         outgoing_players.append({
             'id': player['id'],
             'name': player.get('web_name', f"Player {player['id']}"),
@@ -350,31 +364,31 @@ def build_transfer_suggestions(picks, elements, ranked, bank, limit=4):
 
     suggestions = []
     for outgoing in outgoing_players:
-        budget = bank + outgoing['selling_price']
         for incoming in ranked:
-            if incoming['id'] in owned_ids or incoming['position'] != outgoing['position']:
-                continue
-            if incoming['price'] * 10 > budget:
+            if (incoming['id'] in owned_ids or incoming['position'] != outgoing['position']
+                    or 'rashford' in incoming['name'].lower()):
                 continue
             club_count = club_counts.get(incoming['team_id'], 0)
             if incoming['team_id'] == outgoing['team_id']:
                 club_count -= 1
             if club_count >= 3:
                 continue
+            net_cost = incoming['price'] * 10 - outgoing['selling_price']
             suggestions.append({
                 'outgoing': outgoing,
                 'incoming': incoming,
                 'score_change': incoming['score'] - outgoing['score'],
-                'net_cost': incoming['price'] * 10 - outgoing['selling_price'],
+                'net_cost': net_cost,
+                'shortfall': max(0, net_cost - bank),
             })
 
     suggestions.sort(
         key=lambda suggestion: (
-            suggestion['score_change'],
-            suggestion['incoming']['score'],
-            -abs(suggestion['net_cost']),
+            suggestion['shortfall'],
+            -suggestion['score_change'],
+            -suggestion['incoming']['score'],
+            abs(suggestion['net_cost']),
         ),
-        reverse=True,
     )
     selected = []
     selected_outgoing_ids = set()
@@ -389,6 +403,14 @@ def build_transfer_suggestions(picks, elements, ranked, bank, limit=4):
         selected_incoming_ids.add(incoming_id)
         if len(selected) == limit:
             break
+    for incoming in ranked:
+        if len(selected) == limit:
+            break
+        if (incoming['id'] in owned_ids or incoming['id'] in selected_incoming_ids
+                or 'rashford' in incoming['name'].lower()):
+            continue
+        selected.append({'outgoing': None, 'incoming': incoming, 'net_cost': None})
+        selected_incoming_ids.add(incoming['id'])
     return selected
 
 
@@ -420,10 +442,10 @@ def build_personalized_recommendations_text(league_id, query='', selected_entry_
     picks_data = get(f"entry/{member['entry']}/event/{current_gameweek}/picks/")
     picks = picks_data.get('picks', [])
     bank = picks_data.get('entry_history', {}).get('bank')
-    if not picks:
-        return f"No current squad picks are available for {member['player_name']}."
-    if not isinstance(bank, (int, float)) or isinstance(bank, bool):
-        return 'The FPL API did not provide this manager’s bank.'
+    transfers = get(f"entry/{member['entry']}/transfers/")
+    has_bank = isinstance(bank, (int, float)) and not isinstance(bank, bool)
+    if not has_bank:
+        bank = 0
 
     next_event = get_next_gameweek(bootstrap)
     if not next_event:
@@ -431,32 +453,42 @@ def build_personalized_recommendations_text(league_id, query='', selected_entry_
     fixtures = get('fixtures/')
     ranked = rank_player_picks(bootstrap, fixtures, next_event['id'], (1, 2, 3, 4))
     elements = {player['id']: player for player in bootstrap.get('elements', [])}
-    suggestions = build_transfer_suggestions(picks, elements, ranked, bank)
+    suggestions = build_transfer_suggestions(picks, elements, ranked, bank, transfers)
 
     transfer_limit = bootstrap.get('game_settings', {}).get('max_extra_free_transfers')
-    free_transfers = calculate_free_transfers(
-        history,
-        next_event['id'],
-        transfer_limit + 1
-        if isinstance(transfer_limit, int) and not isinstance(transfer_limit, bool)
-        else None,
-    )
+    transfer_cap = transfer_limit if isinstance(transfer_limit, int) and not isinstance(transfer_limit, bool) else None
+    current_free_transfers = calculate_free_transfers(history, current_gameweek, transfer_cap)
+    next_free_transfers = calculate_free_transfers(history, next_event['id'], transfer_cap)
     lines = [f"💡 GW{next_event['id']} transfer options for {member['player_name']}:"]
-    if free_transfers is not None:
-        lines.append(f'Free transfers: {free_transfers}')
+    lines.append(
+        f"Free transfers: {current_free_transfers if current_free_transfers is not None else 'unavailable'} "
+        f"left for GW{current_gameweek}; "
+        f"{next_free_transfers if next_free_transfers is not None else 'unavailable'} "
+        f"available for GW{next_event['id']}"
+    )
+    if not picks:
+        lines.append('Squad picks are unavailable; showing general player ideas.')
+    elif not has_bank:
+        lines.append('Bank unavailable; affordability cannot be checked.')
     lines.append('1. Marcus Rashford')
-    if not suggestions:
-        lines.append('No affordable same-position transfer options are available.')
-        return '\n'.join(lines)
     for index, suggestion in enumerate(suggestions, start=2):
-        outgoing = suggestion['outgoing']
         incoming = suggestion['incoming']
-        remaining_bank = bank - suggestion['net_cost']
-        lines.append(
-            f"{index}. {outgoing['name']} → {incoming['name']} "
-            f"(bank £{remaining_bank / 10:.1f}m after move; "
-            f"form {incoming['form']:g}; {incoming['fixture']})"
-        )
+        details = [f"form {incoming['form']:g}", incoming['fixture']]
+        outgoing = suggestion['outgoing']
+        if outgoing and has_bank and isinstance(suggestion['net_cost'], (int, float)):
+            remaining_bank = bank - suggestion['net_cost']
+            details.insert(
+                0,
+                f"est. bank £{remaining_bank / 10:.1f}m after move"
+                if remaining_bank >= 0
+                else f"£{-remaining_bank / 10:.1f}m over budget",
+            )
+            lines.append(f"{index}. {outgoing['name']} → {incoming['name']} ({'; '.join(details)})")
+        elif outgoing:
+            lines.append(f"{index}. {outgoing['name']} → {incoming['name']} ({'; '.join(details)})")
+        else:
+            details.insert(0, f"£{incoming['price']:.1f}m")
+            lines.append(f"{index}. Consider {incoming['name']} ({'; '.join(details)})")
     lines.extend(['', 'Stats-based estimates from form, minutes and fixtures—not guaranteed points.'])
     return '\n'.join(lines)
 
@@ -612,7 +644,7 @@ def build_team_text(league_id, query, selected_entry_id=None):
     free_transfers = calculate_free_transfers(
         history,
         gw,
-        max_extra_free_transfers + 1
+        max_extra_free_transfers
         if isinstance(max_extra_free_transfers, int) and not isinstance(max_extra_free_transfers, bool)
         else None,
     )

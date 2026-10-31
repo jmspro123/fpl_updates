@@ -12,11 +12,11 @@ Available Telegram commands:
 - `/moves` or `/transfers` — up to 15 recent transfers plus up to 10 recent chip activations or point hits across the league, with manager and gameweek.
 - `/banter` — friendly weekly bragging-rights recap.
 - `/fixtures` — next gameweek’s fixtures and the toughest upcoming fixture runs.
-- `/recommend` — choose a league manager (or type their name) for up to four affordable same-position transfer swaps based on their squad, bank, selling prices, form, minutes, and fixtures, plus a fixed first pick.
+- `/recommend` — choose a league manager (or type their name) for up to four same-position transfer ideas based on their squad, bank, estimated sale values, form, minutes, and fixtures, plus a fixed first pick.
 - `/captain` — a top-three captain shortlist based on form, minutes, and fixture difficulty.
 - `/team` — select a manager from Telegram buttons to view their picks, captain, vice-captain, bench, bank, squad value, free transfers left for the displayed gameweek, and chips used through that gameweek when FPL makes the picks available. A typed manager name still works too.
 
-The personalized `/recommend` output shows free transfers when available, then affordable same-position swaps ranked by estimated score improvement. Each swap includes the outgoing and incoming players and the bank remaining afterward. The suggestions use FPL form, minutes, and fixture data; they are not AI-generated predictions or guaranteed points.
+The personalized `/recommend` output shows the free transfers available for the next gameweek, then same-position swaps ranked by estimated score improvement. If a swap exceeds the bank, the shortfall is shown; when current squad picks are unavailable, it falls back to general player ideas. FPL does not include public pick selling prices, so sale values are estimated from transfer purchase prices when available or current prices otherwise. The suggestions use FPL form, minutes, and fixture data; they are not AI-generated predictions or guaranteed points.
 
 The `/team` response includes the manager’s bank, squad value, free transfers remaining after transfers for the displayed gameweek, and chips used through that gameweek. Set `FPL_PRIVATE_ENTRY_ID` to the manager entry whose squad, personalized recommendations, and transfer/chip activity should be kept private. Configure the same environment variable for the local polling bot, and keep its value out of source control.
 To show these commands in Telegram's slash-command menu, add them with BotFather using `/setcommands`.

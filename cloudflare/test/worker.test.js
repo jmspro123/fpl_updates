@@ -7,6 +7,8 @@ const telegramReplies = [];
 const telegramCalls = [];
 const fplCalls = [];
 let picksAreEmpty = false;
+let picksOmitSellingPrices = false;
+let historyThroughGameweek = 4;
 
 const env = {
 	TG_TOKEN: 'test-token',
@@ -24,13 +26,22 @@ beforeEach(() => {
 	telegramCalls.length = 0;
 	fplCalls.length = 0;
 	picksAreEmpty = false;
+	picksOmitSellingPrices = false;
+	historyThroughGameweek = 4;
 	globalThis.fetch = async (input, init = {}) => {
 		const url = String(input);
 		if (url.includes('/bootstrap-static/')) {
 			fplCalls.push(url);
 			return Response.json({
-				events: [1, 2, 3, 4].map((id) => ({ id, finished: true, is_current: id === 4, is_next: false }))
-					.concat([{ id: 5, finished: false, is_current: false, is_next: true }, { id: 6, finished: false, is_current: false, is_next: false }]),
+				events: Array.from({ length: Math.max(6, historyThroughGameweek + 1) }, (_, i) => {
+					const id = i + 1;
+					return {
+						id,
+						finished: id <= historyThroughGameweek,
+						is_current: id === historyThroughGameweek,
+						is_next: id === historyThroughGameweek + 1,
+					};
+				}),
 				game_settings: { max_extra_free_transfers: 4 },
 				teams: [
 					{ id: 1, name: 'Alpha FC', short_name: 'ALP' },
@@ -54,46 +65,54 @@ beforeEach(() => {
 				{ event: 6, team_h: 2, team_a: 1, team_h_difficulty: 3, team_a_difficulty: 4, kickoff_time: '2026-10-31T12:30:00Z' },
 			]);
 		}
-		if (url.includes('/event/4/picks/')) {
+		if (/\/event\/\d+\/picks\//.test(url)) {
 			fplCalls.push(url);
 			if (picksAreEmpty) return Response.json({ picks: [], entry_history: { bank: 20, value: 1000 } });
-			return Response.json({ picks: [
+			const picks = [
 				{ element: 101, position: 1, selling_price: 45 },
 				{ element: 102, position: 2, selling_price: 55, is_captain: true },
 				{ element: 103, position: 3, selling_price: 85, is_vice_captain: true },
 				{ element: 104, position: 4, selling_price: 90 },
 				...Array.from({ length: 7 }, (_, i) => ({ element: 105 + i, position: 5 + i, selling_price: 50 })),
 				{ element: 113, position: 12, selling_price: 50 },
-			], entry_history: { bank: 20, value: 1000 } });
+			];
+			if (picksOmitSellingPrices) {
+				for (const pick of picks) delete pick.selling_price;
+			}
+			return Response.json({ picks, entry_history: { bank: 20, value: 1000 } });
 		}
 		if (url.includes('/transfers/')) {
 			fplCalls.push(url);
 			const entry = Number(url.match(/entry\/(\d+)/)[1]);
 			if (entry === 987654) {
-				return Response.json([{ event: 5, element_in: 103, element_out: 102, time: '2026-10-24T12:00:00Z' }]);
+				return Response.json([{ event: 5, element_in: 103, element_in_cost: 85, element_out: 102, element_out_cost: 55, time: '2026-10-24T12:00:00Z' }]);
 			}
 			return Response.json(entry === 11
-				? [{ event: 5, element_in: 103, element_out: 102, time: '2026-10-24T10:00:00Z' }]
-				: [{ event: 5, element_in: 104, element_out: 101, time: '2026-10-24T11:00:00Z' }]);
+				? [{ event: 5, element_in: 103, element_in_cost: 85, element_out: 102, element_out_cost: 55, time: '2026-10-24T10:00:00Z' }]
+				: [{ event: 5, element_in: 104, element_in_cost: 90, element_out: 101, element_out_cost: 45, time: '2026-10-24T11:00:00Z' }]);
 		}
 		if (url.includes('/history/')) {
 			fplCalls.push(url);
 			const entry = Number(url.match(/entry\/(\d+)/)[1]);
 			return Response.json({
-				current: [1, 2, 3, 4].map((event) => {
+				current: Array.from({ length: historyThroughGameweek }, (_, index) => {
+					const event = index + 1;
 					const cost = event === 4 && entry === 11 ? 4 : event === 3 && entry === 22 ? 8 : 0;
+					const transfers = entry === 22
+						? ({ 2: 1, 3: 1, 7: 1, 8: 1 }[event] || 0)
+						: event === 4 && entry === 11 ? 2 : 0;
 					return {
 						event,
 						points: (entry === 11 ? 10 + event : 20 + event) + cost,
 						event_transfers_cost: cost,
-						event_transfers: event === 4 && entry === 11 ? 2 : 0,
+						event_transfers: transfers,
 					};
 				}),
 				chips: entry === 987654
 					? [{ name: '3xc', event: 4 }]
 					: entry === 11
 					? [{ name: 'freehit', event: 3 }]
-					: [{ name: 'wildcard', event: 2 }],
+					: [{ name: 'wildcard', event: historyThroughGameweek >= 8 ? 4 : 2 }],
 			});
 		}
 		if (url.includes('/leagues-classic/')) {
@@ -203,21 +222,41 @@ test('fixtures command shows the next round and difficult runs', async () => {
 	assert.match(telegramReplies.at(-1).text, /Toughest next 2-GW run/);
 });
 
-test('/recommend shows Rashford first and follows with affordable squad-aware swaps', async () => {
+test('/recommend shows Rashford first and follows with squad-aware swaps', async () => {
 	await postUpdate(-1001, '/recommend Alpha');
 	const text = telegramReplies.at(-1).text;
 	assert.match(text, /GW5 transfer options for Alpha/);
-	assert.match(text, /Free transfers: 3/);
+	assert.match(text, /Free transfers: 2 left for GW4; 3 available for GW5/);
 	assert.match(text, /1\. Marcus Rashford/);
-	assert.match(text, /2\. Player\d+ → Budget Midfielder \(bank £0\.0m after move; form 6; A ALP \(FDR 2\)\)/);
+	assert.match(text, /2\. Player\d+ → Budget Midfielder \(est\. bank £0\.0m after move; form 6; A ALP \(FDR 2\)\)/);
 	assert.doesNotMatch(text, /swap budget|joke|prank/i);
 	assert.doesNotMatch(text, /Marcus Rashford.*form 10\/10/);
 });
 
-test('/recommend explains when current squad picks are unavailable', async () => {
+test('/recommend estimates outgoing value when FPL omits pick selling prices', async () => {
+	picksOmitSellingPrices = true;
+	await postUpdate(-1001, '/recommend Alpha');
+	const text = telegramReplies.at(-1).text;
+	assert.match(text, /2\. Player\d+ → Budget Midfielder \(est\. bank £0\.0m after move;/);
+	assert.equal(text.split('\n').filter((line) => /^\d+\. /.test(line)).length, 5);
+});
+
+test('/recommend still provides general player ideas when current squad picks are unavailable', async () => {
 	picksAreEmpty = true;
 	await postUpdate(-1001, '/recommend Alpha');
-	assert.match(telegramReplies.at(-1).text, /No current squad picks are available for Alpha/);
+	const text = telegramReplies.at(-1).text;
+	assert.match(text, /Squad picks are unavailable; showing general player ideas/);
+	assert.match(text, /1\. Marcus Rashford/);
+	assert.match(text, /2\. Consider /);
+	assert.equal(text.split('\n').filter((line) => /^\d+\. /.test(line)).length, 5);
+});
+
+test('/recommend caps carried free transfers at four for the next gameweek', async () => {
+	historyThroughGameweek = 8;
+	await postUpdate(-1001, '/recommend Beta');
+	assert.match(telegramReplies.at(-1).text, /GW9 transfer options for Beta/);
+	assert.match(telegramReplies.at(-1).text, /Free transfers: 3 left for GW8; 4 available for GW9/);
+	assert.doesNotMatch(telegramReplies.at(-1).text, /available for GW9: 5/);
 });
 
 test('/recommend without a manager offers personalized recommendation choices', async () => {
