@@ -579,14 +579,9 @@ async function teamText(leagueId, query, selectedEntryId, privateEntryId) {
 	]);
 	const events = bootstrap.events || [];
 	const currentEvent = events.find((event) => event.is_current);
-	const nextEvent = events.find((event) => event.is_next);
 	const gw = currentEvent?.id
 		|| Math.max(0, ...(history.current || []).map((event) => event.event));
 	if (!gw) return 'No gameweek is currently available for that manager.';
-	const transferEvent = currentEvent && !currentEvent.finished
-		? currentEvent
-		: nextEvent || currentEvent;
-	const transferGameweek = transferEvent?.id || gw;
 	const picksData = await fplGet(`entry/${entryId}/event/${gw}/picks/`);
 	const entryHistory = picksData.entry_history || {};
 	if (!Number.isFinite(entryHistory.bank) || !Number.isFinite(entryHistory.value)) {
@@ -602,13 +597,24 @@ async function teamText(leagueId, query, selectedEntryId, privateEntryId) {
 	const maxExtraFreeTransfers = bootstrap.game_settings?.max_extra_free_transfers;
 	const freeTransfers = calculateFreeTransfers(
 		history,
-		transferGameweek,
+		gw,
 		Number.isInteger(maxExtraFreeTransfers) ? maxExtraFreeTransfers + 1 : undefined,
 	);
+	const chipNames = {
+		wildcard: 'Wildcard',
+		freehit: 'Free Hit',
+		bboost: 'Bench Boost',
+		'3xc': 'Triple Captain',
+		assistant_manager: 'Assistant Manager',
+	};
+	const usedChips = (history.chips || [])
+		.filter((chip) => Number.isInteger(chip.event) && chip.event <= gw)
+		.map((chip) => `${chipNames[chip.name] || chip.name.replaceAll('_', ' ')} (GW${chip.event})`);
 	const lines = [
 		`🧢 ${name}’s GW${gw} team${formation ? ` (${formation})` : ''}:`,
 		`Bank: £${(entryHistory.bank / 10).toFixed(1)}m · Squad value: £${(entryHistory.value / 10).toFixed(1)}m`,
-		`Free transfers for GW${transferGameweek}: ${freeTransfers ?? 'unavailable'}`,
+		`Free transfers left for GW${gw}: ${freeTransfers ?? 'unavailable'}`,
+		`Chips used: ${usedChips.length ? usedChips.join(', ') : 'None'}`,
 	];
 	for (const pick of starters) {
 		const player = players.get(pick.element) || `Player ${pick.element}`;

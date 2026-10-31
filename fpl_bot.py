@@ -590,16 +590,11 @@ def build_team_text(league_id, query, selected_entry_id=None):
     history = get(f'entry/{entry_id}/history/')
     events = bootstrap.get('events', [])
     current_event = next((event for event in events if event.get('is_current')), None)
-    next_event = next((event for event in events if event.get('is_next')), None)
     gw = current_event.get('id') if current_event else max(
         (event['event'] for event in history.get('current', [])), default=0,
     )
     if not gw:
         return 'No gameweek is currently available for that manager.'
-    transfer_event = current_event if current_event and not current_event.get('finished') else next_event
-    if transfer_event is None:
-        transfer_event = current_event
-    transfer_gameweek = transfer_event.get('id') if transfer_event else gw
     picks_data = get(f'entry/{entry_id}/event/{gw}/picks/')
     entry_history = picks_data.get('entry_history', {})
     if not isinstance(entry_history.get('bank'), (int, float)) or not isinstance(entry_history.get('value'), (int, float)):
@@ -616,17 +611,31 @@ def build_team_text(league_id, query, selected_entry_id=None):
     max_extra_free_transfers = bootstrap.get('game_settings', {}).get('max_extra_free_transfers')
     free_transfers = calculate_free_transfers(
         history,
-        transfer_gameweek,
+        gw,
         max_extra_free_transfers + 1
         if isinstance(max_extra_free_transfers, int) and not isinstance(max_extra_free_transfers, bool)
         else None,
     )
+    chip_names = {
+        'wildcard': 'Wildcard',
+        'freehit': 'Free Hit',
+        'bboost': 'Bench Boost',
+        '3xc': 'Triple Captain',
+        'assistant_manager': 'Assistant Manager',
+    }
+    used_chips = [
+        f"{chip_names.get(chip.get('name', 'Chip'), chip.get('name', 'Chip').replace('_', ' '))} "
+        f"(GW{chip['event']})"
+        for chip in history.get('chips', [])
+        if isinstance(chip.get('event'), int) and chip['event'] <= gw
+    ]
     lines = [
         f'🧢 {name}’s GW{gw} team ({formation}):',
         f"Bank: £{entry_history['bank'] / 10:.1f}m · Squad value: £{entry_history['value'] / 10:.1f}m",
-        f'Free transfers for GW{transfer_gameweek}: {free_transfers}'
+        f'Free transfers left for GW{gw}: {free_transfers}'
         if free_transfers is not None
-        else f'Free transfers for GW{transfer_gameweek}: unavailable',
+        else f'Free transfers left for GW{gw}: unavailable',
+        f"Chips used: {', '.join(used_chips) if used_chips else 'None'}",
     ]
     for pick in starters:
         player = players.get(pick['element'], f"Player {pick['element']}")

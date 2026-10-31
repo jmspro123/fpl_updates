@@ -86,7 +86,7 @@ beforeEach(() => {
 						event,
 						points: (entry === 11 ? 10 + event : 20 + event) + cost,
 						event_transfers_cost: cost,
-						event_transfers: 0,
+						event_transfers: event === 4 && entry === 11 ? 2 : 0,
 					};
 				}),
 				chips: entry === 987654
@@ -207,7 +207,7 @@ test('/recommend shows Rashford first and follows with affordable squad-aware sw
 	await postUpdate(-1001, '/recommend Alpha');
 	const text = telegramReplies.at(-1).text;
 	assert.match(text, /GW5 transfer options for Alpha/);
-	assert.match(text, /Free transfers: 5/);
+	assert.match(text, /Free transfers: 3/);
 	assert.match(text, /1\. Marcus Rashford/);
 	assert.match(text, /2\. Player\d+ → Budget Midfielder \(bank £0\.0m after move; form 6; A ALP \(FDR 2\)\)/);
 	assert.doesNotMatch(text, /swap budget|joke|prank/i);
@@ -269,7 +269,9 @@ test('team command displays a manager’s starting picks, captain, and bench', a
 	assert.match(telegramReplies.at(-1).text, /Midfielder \(VC\)/);
 	assert.match(telegramReplies.at(-1).text, /Bench: Player8/);
 	assert.match(telegramReplies.at(-1).text, /Bank: £2\.0m · Squad value: £100\.0m/);
-	assert.match(telegramReplies.at(-1).text, /Free transfers for GW5: 5/);
+	assert.match(telegramReplies.at(-1).text, /Free transfers left for GW4: 2/);
+	assert.match(telegramReplies.at(-1).text, /Chips used: Free Hit \(GW3\)/);
+	assert.doesNotMatch(telegramReplies.at(-1).text, /Free transfers left for GW5/);
 });
 
 test('/team without a name offers tappable manager choices', async () => {
@@ -282,8 +284,13 @@ test('/team without a name offers tappable manager choices', async () => {
 
 	await postCallback(-1001, 'team:11');
 	assert.match(telegramReplies.at(-1).text, /Alpha’s GW4 team/);
-	assert.match(telegramReplies.at(-1).text, /Free transfers for GW5: 5/);
+	assert.match(telegramReplies.at(-1).text, /Free transfers left for GW4: 2/);
 	assert.equal(telegramCalls.some((call) => call.url.endsWith('/answerCallbackQuery')), true);
+});
+
+test('/team shows used chips for the selected manager', async () => {
+	await postUpdate(-1001, '/team Beta');
+	assert.match(telegramReplies.at(-1).text, /Chips used: Wildcard \(GW2\)/);
 });
 
 test('/team and /recommend keep the private manager confidential', async () => {
