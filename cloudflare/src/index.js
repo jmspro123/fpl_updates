@@ -51,6 +51,30 @@ function getCurrentGameweek(data) {
 	return Math.max(...events);
 }
 
+function calculateFreeTransfers(history, gameweek, maxFreeTransfers) {
+	if (!Number.isInteger(maxFreeTransfers) || maxFreeTransfers < 1) return undefined;
+	const events = new Map((history.current || [])
+		.filter((event) => Number.isInteger(event.event))
+		.map((event) => [event.event, event]));
+	const preservedTransferEvents = new Set((history.chips || [])
+		.filter((chip) => ['wildcard', 'freehit'].includes(chip.name))
+		.map((chip) => chip.event));
+	let available = 1;
+
+	for (let eventId = 1; eventId <= gameweek; eventId += 1) {
+		const event = events.get(eventId);
+		if (!event) return eventId === gameweek ? available : undefined;
+		if (!Number.isInteger(event.event_transfers)) return undefined;
+		if (!preservedTransferEvents.has(eventId)) {
+			available = Math.max(0, available - event.event_transfers);
+		}
+		if (eventId < gameweek) {
+			available = Math.min(maxFreeTransfers, available + 1);
+		}
+	}
+	return available;
+}
+
 function buildQuarterMessage(data, gw) {
 	const quarters = [[1, 9], [10, 18], [19, 27], [28, 38]];
 	const quarterIndex = quarters.findIndex(([start, end]) => start <= gw && gw <= end);
@@ -386,7 +410,8 @@ async function personalizedRecommendationsText(leagueId, query, selectedEntryId,
 	const picksData = await fplGet(`entry/${member.entry}/event/${currentGameweek}/picks/`);
 	const picks = picksData.picks || [];
 	const bank = picksData.entry_history?.bank;
-	const availableBank = Number.isFinite(bank) ? bank : 0;
+	if (picks.length === 0) return `No current squad picks are available for ${member.player_name}.`;
+	if (!Number.isFinite(bank)) return 'The FPL API did not provide this manager’s bank.';
 
 	const nextEvent = getNextGameweek(bootstrap);
 	if (!nextEvent) return 'No upcoming gameweek is currently available for recommendations.';
@@ -394,118 +419,81 @@ async function personalizedRecommendationsText(leagueId, query, selectedEntryId,
 	const rankedById = new Map(ranked.map((player) => [player.id, player]));
 	const ownedIds = new Set(picks.map((pick) => pick.element));
 	const elementsById = new Map((bootstrap.elements || []).map((player) => [player.id, player]));
-	const teamsById = new Map((bootstrap.teams || []).map((team) => [team.id, team]));
 	const clubCounts = new Map();
 	for (const pick of picks) {
 		const player = elementsById.get(pick.element);
 		if (player) clubCounts.set(player.team, (clubCounts.get(player.team) || 0) + 1);
 	}
 
-	const fixturesByTeam = new Map();
-	for (const fixture of fixtures.filter((item) => item.event === nextEvent.id)) {
-		fixturesByTeam.set(fixture.team_h, {
-			opponent: teamsById.get(fixture.team_a)?.short_name || 'TBC',
-			venue: 'H',
-			difficulty: fixture.team_h_difficulty ?? 3,
-		});
-		fixturesByTeam.set(fixture.team_a, {
-			opponent: teamsById.get(fixture.team_h)?.short_name || 'TBC',
-			venue: 'A',
-			difficulty: fixture.team_a_difficulty ?? 3,
-		});
-	}
-	const market = (bootstrap.elements || []).filter((player) => player.now_cost > 0
-		&& !ownedIds.has(player.id))
-		.map((player) => {
-			const existing = rankedById.get(player.id);
-			const fixture = fixturesByTeam.get(player.team);
-			const form = Number(player.form) || 0;
-			const pointsPerGame = Number(player.points_per_game) || 0;
-			const minutes = Number(player.minutes) || 0;
-			return existing || {
-				id: player.id,
-				name: player.web_name || `Player ${player.id}`,
-				position: player.element_type,
-				team: teamsById.get(player.team)?.short_name || 'TBC',
-				teamId: player.team,
-				price: player.now_cost / 10,
-				form,
-				fixture: fixture ? `${fixture.venue} ${fixture.opponent} (FDR ${fixture.difficulty})` : 'fixture TBD',
-				score: form * 0.45 + pointsPerGame * 0.35
-					+ (5 - (fixture?.difficulty ?? 3)) * 0.45 + Math.min(minutes / 1800, 1) * 0.75,
-			};
-		}).sort((a, b) => b.score - a.score);
-	const outgoingByPosition = new Map();
+	const outgoingPlayers = [];
 	for (const pick of picks) {
 		const player = elementsById.get(pick.element);
 		if (!player || !Number.isFinite(pick.selling_price)) continue;
-		const current = outgoingByPosition.get(player.element_type);
 		const score = rankedById.get(player.id)?.score ?? Number.NEGATIVE_INFINITY;
-		if (!current || score < current.score) {
-			outgoingByPosition.set(player.element_type, {
-				name: player.web_name || `Player ${player.id}`,
-				teamId: player.team,
-				sellingPrice: pick.selling_price,
-				score,
+		outgoingPlayers.push({
+			id: player.id,
+			name: player.web_name || `Player ${player.id}`,
+			position: player.element_type,
+			teamId: player.team,
+			sellingPrice: pick.selling_price,
+			score,
+		});
+	}
+
+	const possibleSwaps = [];
+	for (const outgoing of outgoingPlayers) {
+		const budget = bank + outgoing.sellingPrice;
+		for (const incoming of ranked) {
+			if (ownedIds.has(incoming.id) || incoming.position !== outgoing.position) continue;
+			if (incoming.price * 10 > budget) continue;
+			const clubCount = (clubCounts.get(incoming.teamId) || 0)
+				- (incoming.teamId === outgoing.teamId ? 1 : 0);
+			if (clubCount >= 3) continue;
+			possibleSwaps.push({
+				outgoing,
+				incoming,
+				scoreChange: incoming.score - outgoing.score,
+				netCost: incoming.price * 10 - outgoing.sellingPrice,
 			});
 		}
 	}
-	const canJoinClub = (player) => {
-		const outgoing = outgoingByPosition.get(player.position);
-		return (clubCounts.get(player.teamId) || 0) - (outgoing?.teamId === player.teamId ? 1 : 0) < 3;
-	};
-	const rashford = market.find((player) => /rashford/i.test(player.name));
-	const recommendations = [{
-		player: rashford || {
-			id: 'rashford',
-			name: 'Marcus Rashford',
-			position: undefined,
-			team: undefined,
-			price: undefined,
-			form: 10,
-			fixture: undefined,
-		},
-		forced: true,
-	}];
-	const selectedIds = new Set(rashford ? [rashford.id] : []);
-	const affordable = market.filter((player) => !selectedIds.has(player.id)
-		&& canJoinClub(player)
-		&& outgoingByPosition.has(player.position)
-		&& player.price * 10 <= availableBank + outgoingByPosition.get(player.position).sellingPrice);
-	for (const player of affordable) {
-		if (recommendations.length >= 5) break;
-		selectedIds.add(player.id);
-		recommendations.push({ player, forced: false });
+	possibleSwaps.sort((a, b) => b.scoreChange - a.scoreChange
+		|| b.incoming.score - a.incoming.score
+		|| Math.abs(a.netCost) - Math.abs(b.netCost));
+	const recommendations = [];
+	const selectedOutgoingIds = new Set();
+	const selectedIncomingIds = new Set();
+	for (const suggestion of possibleSwaps) {
+		if (selectedOutgoingIds.has(suggestion.outgoing.id)
+			|| selectedIncomingIds.has(suggestion.incoming.id)) continue;
+		recommendations.push(suggestion);
+		selectedOutgoingIds.add(suggestion.outgoing.id);
+		selectedIncomingIds.add(suggestion.incoming.id);
+		if (recommendations.length === 4) break;
 	}
-	for (const player of market) {
-		if (recommendations.length >= 5) break;
-		if (selectedIds.has(player.id)) continue;
-		selectedIds.add(player.id);
-		recommendations.push({ player, forced: false });
-	}
-	const lines = [
-		`💡 GW${nextEvent.id} transfer ideas for ${member.player_name} (five players based on their squad):`,
-	];
-	recommendations.forEach(({ player }, index) => {
-		const details = [];
-		if (player.team) details.push(player.team);
-		if (Number.isFinite(player.price)) details.push(`£${player.price.toFixed(1)}m`);
-		details.push(/rashford/i.test(player.name) ? 'form 10/10' : `form ${player.form}`);
-		if (player.fixture) details.push(player.fixture);
-		const outgoing = outgoingByPosition.get(player.position);
-		if (outgoing && Number.isFinite(player.price)) {
-			const budget = availableBank + outgoing.sellingPrice;
-			details.push(player.price * 10 <= budget
-				? `within £${(budget / 10).toFixed(1)}m swap budget for ${outgoing.name}`
-				: `£${((player.price * 10 - budget) / 10).toFixed(1)}m above swap budget for ${outgoing.name}`);
-		}
-		if (!canJoinClub(player)) details.push('would exceed the three-player club limit');
-		lines.push(`${index + 1}. ${player.name} (${details.join('; ')})`);
-	});
-	lines.push(
-		'',
-		'Affordable same-position swaps are listed first. Any remaining suggestions show how far they are above the available swap budget.',
+
+	const maxExtraFreeTransfers = bootstrap.game_settings?.max_extra_free_transfers;
+	const freeTransfers = calculateFreeTransfers(
+		history,
+		nextEvent.id,
+		Number.isInteger(maxExtraFreeTransfers) ? maxExtraFreeTransfers + 1 : undefined,
 	);
+	const lines = [
+		`💡 GW${nextEvent.id} transfer options for ${member.player_name}:`,
+	];
+	if (freeTransfers !== undefined) lines.push(`Free transfers: ${freeTransfers}`);
+	lines.push('1. Marcus Rashford');
+	if (recommendations.length === 0) {
+		lines.push('No affordable same-position transfer options are available.');
+		return lines.join('\n');
+	}
+	recommendations.forEach(({ outgoing, incoming, netCost }, index) => {
+		const remainingBank = bank - netCost;
+		lines.push(`${index + 2}. ${outgoing.name} → ${incoming.name} `
+			+ `(bank £${(remainingBank / 10).toFixed(1)}m after move; `
+			+ `form ${incoming.form}; ${incoming.fixture})`);
+	});
+	lines.push('', 'Stats-based estimates from form, minutes and fixtures—not guaranteed points.');
 	return lines.join('\n');
 }
 
@@ -589,9 +577,16 @@ async function teamText(leagueId, query, selectedEntryId, privateEntryId) {
 		fplGet('bootstrap-static/'),
 		fplGet(`entry/${entryId}/history/`),
 	]);
-	const gw = (bootstrap.events || []).find((event) => event.is_current)?.id
+	const events = bootstrap.events || [];
+	const currentEvent = events.find((event) => event.is_current);
+	const nextEvent = events.find((event) => event.is_next);
+	const gw = currentEvent?.id
 		|| Math.max(0, ...(history.current || []).map((event) => event.event));
 	if (!gw) return 'No gameweek is currently available for that manager.';
+	const transferEvent = currentEvent && !currentEvent.finished
+		? currentEvent
+		: nextEvent || currentEvent;
+	const transferGameweek = transferEvent?.id || gw;
 	const picksData = await fplGet(`entry/${entryId}/event/${gw}/picks/`);
 	const entryHistory = picksData.entry_history || {};
 	if (!Number.isFinite(entryHistory.bank) || !Number.isFinite(entryHistory.value)) {
@@ -604,9 +599,16 @@ async function teamText(leagueId, query, selectedEntryId, privateEntryId) {
 	if (!picks.length) return `No picks are available for ${name} in GW${gw} yet.`;
 	const starters = picks.filter((pick) => pick.position <= 11);
 	const formation = [2, 3, 4].map((type) => starters.filter((pick) => positions.get(pick.element) === type).length).join('-');
+	const maxExtraFreeTransfers = bootstrap.game_settings?.max_extra_free_transfers;
+	const freeTransfers = calculateFreeTransfers(
+		history,
+		transferGameweek,
+		Number.isInteger(maxExtraFreeTransfers) ? maxExtraFreeTransfers + 1 : undefined,
+	);
 	const lines = [
 		`🧢 ${name}’s GW${gw} team${formation ? ` (${formation})` : ''}:`,
 		`Bank: £${(entryHistory.bank / 10).toFixed(1)}m · Squad value: £${(entryHistory.value / 10).toFixed(1)}m`,
+		`Free transfers for GW${transferGameweek}: ${freeTransfers ?? 'unavailable'}`,
 	];
 	for (const pick of starters) {
 		const player = players.get(pick.element) || `Player ${pick.element}`;
