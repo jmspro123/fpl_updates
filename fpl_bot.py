@@ -505,6 +505,43 @@ def format_transfer_time(value):
     return timestamp.astimezone(timezone.utc).strftime('%d %b %H:%M UTC')
 
 
+def calculate_free_transfers(history, gameweek, max_free_transfers):
+    if not isinstance(max_free_transfers, int) or isinstance(max_free_transfers, bool):
+        return None
+    if max_free_transfers < 1:
+        return None
+
+    events = {
+        event.get('event'): event
+        for event in history.get('current', [])
+        if isinstance(event.get('event'), int)
+    }
+    preserved_transfer_events = {
+        chip.get('event')
+        for chip in history.get('chips', [])
+        if chip.get('name') in {'wildcard', 'freehit'}
+    }
+
+    available = 1
+    for event_id in range(1, gameweek + 1):
+        event = events.get(event_id)
+        if event is None:
+            if event_id == gameweek:
+                return available
+            return None
+
+        transfers = event.get('event_transfers')
+        if not isinstance(transfers, int) or isinstance(transfers, bool):
+            return None
+        if event_id not in preserved_transfer_events:
+            available = max(0, available - transfers)
+
+        if event_id < gameweek:
+            available = min(max_free_transfers, available + 1)
+
+    return available
+
+
 def build_moves_text(league_id):
     standings = get(f'leagues-classic/{league_id}/standings/')
     members = standings.get('standings', {}).get('results', [])
@@ -587,10 +624,18 @@ def build_team_text(league_id, query, selected_entry_id=None):
     name, entry_id = member['player_name'], member['entry']
     bootstrap = get('bootstrap-static/')
     history = get(f'entry/{entry_id}/history/')
-    current_event = next((event['id'] for event in bootstrap.get('events', []) if event.get('is_current')), None)
-    gw = current_event or max((event['event'] for event in history.get('current', [])), default=0)
+    events = bootstrap.get('events', [])
+    current_event = next((event for event in events if event.get('is_current')), None)
+    next_event = next((event for event in events if event.get('is_next')), None)
+    gw = current_event.get('id') if current_event else max(
+        (event['event'] for event in history.get('current', [])), default=0,
+    )
     if not gw:
         return 'No gameweek is currently available for that manager.'
+    transfer_event = current_event if current_event and not current_event.get('finished') else next_event
+    if transfer_event is None:
+        transfer_event = current_event
+    transfer_gameweek = transfer_event.get('id') if transfer_event else gw
     picks_data = get(f'entry/{entry_id}/event/{gw}/picks/')
     entry_history = picks_data.get('entry_history', {})
     if not isinstance(entry_history.get('bank'), (int, float)) or not isinstance(entry_history.get('value'), (int, float)):
@@ -604,9 +649,20 @@ def build_team_text(league_id, query, selected_entry_id=None):
     starters = [pick for pick in picks if pick['position'] <= 11]
     formation = '-'.join(str(sum(positions.get(pick['element']) == element_type for pick in starters))
                          for element_type in (2, 3, 4))
+    max_extra_free_transfers = bootstrap.get('game_settings', {}).get('max_extra_free_transfers')
+    free_transfers = calculate_free_transfers(
+        history,
+        transfer_gameweek,
+        max_extra_free_transfers + 1
+        if isinstance(max_extra_free_transfers, int) and not isinstance(max_extra_free_transfers, bool)
+        else None,
+    )
     lines = [
         f'🧢 {name}’s GW{gw} team ({formation}):',
         f"Bank: £{entry_history['bank'] / 10:.1f}m · Squad value: £{entry_history['value'] / 10:.1f}m",
+        f'Free transfers for GW{transfer_gameweek}: {free_transfers}'
+        if free_transfers is not None
+        else f'Free transfers for GW{transfer_gameweek}: unavailable',
     ]
     for pick in starters:
         player = players.get(pick['element'], f"Player {pick['element']}")
